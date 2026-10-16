@@ -1,5 +1,6 @@
-.PHONY: up down test logs
+.PHONY: up down test logs k8s-up k8s-images k8s-deploy k8s-canary k8s-rollback-demo k8s-down lint
 
+# Быстрое демо (по умолчанию для жюри): Docker Compose, ~1 минута, до 2 ГБ RAM.
 up:
 	@test -f .env || cp .env.example .env
 	docker compose up --build -d
@@ -14,3 +15,42 @@ logs:
 test:
 	cd services/api && python -m pip install -r requirements.txt && python -m pytest
 	cd apps/web && npm ci && npm run build
+
+lint:
+	ruff check services/api
+	helm lint deploy/helm/sensor-gateway
+
+# Полный контур: k3s + ingress-nginx + SOPS-секрет + kube-prometheus-stack + Helm-релиз.
+# Нужен sudo (k3s ставится в систему), ~10 минут, ориентир 6-8 ГБ RAM.
+TAG ?= $(shell git rev-parse --short=7 HEAD)
+PREFIX ?= ghcr.io/spar2/mts-devops-case
+export KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
+
+k8s-up:
+	./scripts/k3s-install.sh
+	./scripts/secrets-init.sh
+	./scripts/secrets-apply.sh
+	./scripts/monitoring-install.sh
+	$(MAKE) k8s-images k8s-deploy
+
+# Образы собираются локально и импортируются в containerd k3s: не нужен доступ к приватному GHCR.
+# Чтобы брать образы из GHCR (их пушит CI), выполнить: make k8s-deploy TAG=<sha> после docker login/pull secret.
+k8s-images:
+	docker build -t $(PREFIX)/sensor-gateway:$(TAG) services/api
+	docker build -t $(PREFIX)/sensor-web:$(TAG) apps/web
+	docker save $(PREFIX)/sensor-gateway:$(TAG) $(PREFIX)/sensor-web:$(TAG) | sudo k3s ctr images import -
+
+k8s-deploy:
+	./scripts/deploy.sh $(TAG)
+
+k8s-canary:
+	./scripts/canary.sh $(TAG)
+
+k8s-rollback-demo:
+	./scripts/rollback-demo.sh
+
+k8s-down:
+	-helm uninstall sensor-canary -n sensor
+	-helm uninstall sensor -n sensor
+	-helm uninstall mon -n monitoring
+	@echo "k3s целиком удаляется: sudo /usr/local/bin/k3s-uninstall.sh"
