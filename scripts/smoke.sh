@@ -214,7 +214,7 @@ check_login() {
       --data-binary @"${work}/login.json"
   )"
   token="$(session_from_headers)"
-  if [[ "$status" == "200" && "$token" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  if [[ "$status" == "200" && "$token" =~ ^[A-Za-z0-9._-]+$ ]]; then
     session="$token"
     pass "login cookie dts_session"
     return 0
