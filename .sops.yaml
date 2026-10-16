@@ -1,6 +1,0 @@
-# scripts/secrets-init.sh replaces AGE_PUBLIC_KEY with the age public key.
-# Only data and stringData of deploy/secrets/*.enc.yaml are encrypted.
-creation_rules:
-  - path_regex: deploy/secrets/.*\.enc\.yaml
-    encrypted_regex: '^(data|stringData)$'
-    age: AGE_PUBLIC_KEY

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install sops 3.9.2 and age 1.2.1 into ~/.local/bin, ensure an age key,
-# write its recipient into .sops.yaml, and encrypt sensor-secrets.
+# write its recipient into deploy/secrets/sops.local.yaml (untracked), and encrypt sensor-secrets.
 set -euo pipefail
 
 sops_version=3.9.2
@@ -9,7 +9,9 @@ age_version=1.2.1
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bin="${HOME}/.local/bin"
 key_file="${XDG_CONFIG_HOME:-${HOME}/.config}/sops/age/keys.txt"
-sops_config="${root}/.sops.yaml"
+# Сгенерированный конфиг SOPS с публичным ключом этого стенда. Не трекается git,
+# трекаемые файлы не меняются.
+sops_config="${root}/deploy/secrets/sops.local.yaml"
 enc_file="${root}/deploy/secrets/sensor-secrets.enc.yaml"
 
 mkdir -p "${bin}"
@@ -98,23 +100,15 @@ quote_scalar() {
 }
 
 write_recipient() {
-  local recipient=$1 tmp
-  [[ -f "${sops_config}" ]] || die "Нет ${sops_config}."
-  tmp="$(mktemp)"
-  if ! awk -v rec="${recipient}" '
-    /^[[:space:]]*age:[[:space:]]*/ {
-      match($0, /^[[:space:]]*/)
-      print substr($0, 1, RLENGTH) "age: " rec
-      replaced = 1
-      next
-    }
-    { print }
-    END { if (!replaced) exit 2 }
-  ' "${sops_config}" > "${tmp}"; then
-    rm -f "${tmp}"
-    die "В ${sops_config} нет строки age: — некуда записать получателя."
-  fi
-  mv "${tmp}" "${sops_config}"
+  local recipient=$1
+  cat >"${sops_config}" <<YAML
+# Сгенерировано scripts/secrets-init.sh для этого стенда. В git не попадает.
+creation_rules:
+  # Путь сверяется относительно каталога этого конфига (deploy/secrets).
+  - path_regex: \\.enc\\.yaml\$
+    encrypted_regex: '^(data|stringData)\$'
+    age: ${recipient}
+YAML
   chmod 644 "${sops_config}"
 }
 
@@ -143,7 +137,7 @@ if [[ -f "${enc_file}" ]]; then
     fi
   done
   if [[ "${mismatch}" -eq 1 ]]; then
-    echo "Получатель в .sops.yaml не совпадает с ${enc_file}. Смена ключа — в deploy/secrets/README.md, раздел про ротацию age." >&2
+    echo "Ключ age этой машины не совпадает с получателем с ${enc_file}. Смена ключа — в deploy/secrets/README.md, раздел про ротацию age." >&2
   fi
   exit 0
 fi
@@ -180,11 +174,13 @@ trap cleanup EXIT
     'type: Opaque' \
     'stringData:'
   printf '  DEMO_PASSWORD: %s\n' "$(quote_scalar "${password}")"
+  # Ключ подписи сессий (общий для stable и canary; ротация DEMO_PASSWORD тоже отзывает сессии).
+  printf '  SESSION_SECRET: %s\n' "$(quote_scalar "$(openssl rand -hex 24)")"
 } > "${plain}"
 
 export SOPS_AGE_KEY_FILE="${key_file}"
 cd "${root}"
-sops --encrypt --in-place "${plain}"
+sops --config "${sops_config}" --encrypt --in-place "${plain}"
 trap - EXIT
 mv "${plain}" "${enc_file}"
 chmod 644 "${enc_file}"

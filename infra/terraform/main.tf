@@ -5,8 +5,6 @@ provider "libvirt" {
 locals {
   # Поток release, не daily. Имя файла стабильное, содержимое — текущий point-release 24.04.
   ubuntu_image_url = "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
-  vcpu             = 4
-  memory_mib       = 8192                    # 8 GiB
   disk_bytes       = 30 * 1024 * 1024 * 1024 # 30 GiB
 }
 
@@ -39,8 +37,8 @@ resource "libvirt_cloudinit_disk" "sensor" {
 
 resource "libvirt_domain" "sensor" {
   name      = "mts-sensor"
-  vcpu      = local.vcpu
-  memory    = local.memory_mib
+  vcpu      = var.vm_vcpu
+  memory    = var.vm_memory_mib
   cloudinit = libvirt_cloudinit_disk.sensor.id
   autostart = true
 

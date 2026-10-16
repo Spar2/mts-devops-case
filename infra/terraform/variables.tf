@@ -22,3 +22,15 @@ variable "libvirt_uri" {
   type        = string
   default     = "qemu:///system"
 }
+
+variable "vm_vcpu" {
+  description = "vCPU ВМ"
+  type        = number
+  default     = 4
+}
+
+variable "vm_memory_mib" {
+  description = "RAM ВМ в МиБ (8 ГиБ по умолчанию; kube-prometheus-stack + k3s укладываются в 6 ГиБ)"
+  type        = number
+  default     = 8192
+}

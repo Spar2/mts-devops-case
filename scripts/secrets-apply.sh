@@ -25,4 +25,10 @@ fi
 
 cd "${root}"
 kubectl create namespace sensor --dry-run=client -o yaml | kubectl apply -f -
-sops -d deploy/secrets/sensor-secrets.enc.yaml | kubectl apply -f -
+out="$(sops -d deploy/secrets/sensor-secrets.enc.yaml | kubectl apply -f -)"
+echo "${out}"
+# Поды читают секрет из env только при старте: если Secret изменился, перезапускаем API.
+if [[ "${out}" == *configured* ]] && kubectl -n sensor get deploy -l app.kubernetes.io/component=api -o name | grep -q .; then
+  kubectl -n sensor rollout restart deploy -l app.kubernetes.io/component=api
+  kubectl -n sensor rollout status deploy -l app.kubernetes.io/component=api --timeout=180s
+fi
