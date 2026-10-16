@@ -71,7 +71,7 @@ Compose-режим проще: браузер → nginx (`web`, порт 8080) �
 | Node.js / Vite / React | 24 / 8 / 19 |
 | nginx | 1.27-alpine |
 | Docker Compose | V2 (проверено на 2.30.3) |
-| GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@0.28.0` (HIGH, CRITICAL) |
+| GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0` (HIGH, CRITICAL) |
 | k3s | v1.31.4+k3s1, traefik отключён (локально проверено в k3d v5.7.5) |
 | Helm | v3.16.3 |
 | ingress-nginx | чарт 4.11.3 (https://kubernetes.github.io/ingress-nginx) |

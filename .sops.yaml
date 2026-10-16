@@ -3,4 +3,4 @@
 creation_rules:
   - path_regex: deploy/secrets/.*\.enc\.yaml
     encrypted_regex: '^(data|stringData)$'
-    age: AGE_PUBLIC_KEY
+    age: age103632wm5ehdxu0atthyylpzm0hh4jw599y8tjrc8pjudtymjnfhqxckkv0

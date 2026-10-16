@@ -81,7 +81,7 @@ jobs:
             ${{ env.WEB_IMAGE }}:latest
 
       - name: Scan sensor-gateway
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.API_IMAGE }}:${{ steps.tag.outputs.sha }}
           severity: HIGH,CRITICAL
@@ -89,7 +89,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan sensor-web
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.WEB_IMAGE }}:${{ steps.tag.outputs.sha }}
           severity: HIGH,CRITICAL
