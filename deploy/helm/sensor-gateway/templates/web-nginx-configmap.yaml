@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-web-nginx
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "sensor-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+data:
+  default.conf: |
+    {{- include "sensor-gateway.nginxConf" . | nindent 4 }}

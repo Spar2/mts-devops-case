@@ -1,0 +1,25 @@
+{{- if not .Values.existingSecret -}}
+{{- fail "existingSecret is required (Secret key DEMO_PASSWORD)" -}}
+{{- end -}}
+{{- if not .Values.image.api.repository -}}
+{{- fail "image.api.repository is required" -}}
+{{- end -}}
+{{- if not .Values.image.web.repository -}}
+{{- fail "image.web.repository is required" -}}
+{{- end -}}
+{{- if not .Values.ingress.host -}}
+{{- fail "ingress.host is required" -}}
+{{- end -}}
+{{- if not (or (eq .Values.track "stable") (eq .Values.track "canary")) -}}
+{{- fail "track must be stable or canary" -}}
+{{- end -}}
+{{- if and (eq .Values.track "canary") (not .Values.canary.enabled) -}}
+{{- fail "track=canary requires canary.enabled=true" -}}
+{{- end -}}
+{{- if and (eq .Values.track "stable") .Values.canary.enabled -}}
+{{- fail "canary.enabled is only valid when track=canary" -}}
+{{- end -}}
+{{- $weight := .Values.canary.weight | int -}}
+{{- if or (lt $weight 0) (gt $weight 100) -}}
+{{- fail "canary.weight must be between 0 and 100" -}}
+{{- end -}}

@@ -1,0 +1,12 @@
+Release {{ .Release.Name }} (track {{ .Values.track }}) is in namespace {{ .Release.Namespace }}.
+Open http://{{ .Values.ingress.host }}/
+{{- if and (eq .Values.track "canary") .Values.canary.enabled }}
+This ingress is the nginx canary at weight {{ .Values.canary.weight }}.
+{{- else }}
+Canary: helm upgrade --install sensor-canary <chart> --namespace {{ .Release.Namespace }} --set track=canary --set canary.enabled=true --set canary.weight=10
+{{- end }}
+DEMO_PASSWORD is read from Secret {{ .Values.existingSecret }}, key DEMO_PASSWORD.
+API Service {{ .Release.Name }}-api port http:8000. Web Service {{ .Release.Name }}-web port http:80.
+{{- if .Values.serviceMonitor.enabled }}
+ServiceMonitor {{ .Release.Name }}-api (label release=mon, path /metrics) is applied when monitoring.coreos.com/v1/ServiceMonitor exists.
+{{- end }}

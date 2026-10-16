@@ -1,0 +1,174 @@
+---
+# Local bootstrap: scripts/k3s-install.sh, then the k8s-deploy equivalent
+# (helm upgrade --install release "sensor" in namespace "sensor").
+# K3D=1 selects the k3d path inside the install script.
+# IMAGE_TAG (or TAG) pins both images; default is latest.
+# DEMO_PASSWORD (>=12) or a repo-root .env is required the first time,
+# to create Secret sensor-secrets. An existing Secret is left as-is.
+# CANARY=1 also installs release sensor-canary (track=canary, weight CANARY_WEIGHT).
+- name: Sensor gateway cluster
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+    k3d: "{{ lookup('env', 'K3D') | default('0', true) }}"
+    image_tag: "{{ lookup('env', 'IMAGE_TAG') | default(lookup('env', 'TAG'), true) | default('latest', true) }}"
+    canary_weight: "{{ lookup('env', 'CANARY_WEIGHT') | default('10', true) }}"
+    namespace: sensor
+    kubeconfig: "{{ lookup('env', 'HOME') + '/.kube/config' if k3d == '1' else '/etc/rancher/k3s/k3s.yaml' }}"
+  tasks:
+    - name: Install k3s or k3d, Helm, and ingress-nginx
+      ansible.builtin.command:
+        argv:
+          - bash
+          - "{{ repo_root }}/scripts/k3s-install.sh"
+      environment:
+        K3D: "{{ k3d }}"
+      changed_when: true
+
+    - name: Check namespace
+      ansible.builtin.command:
+        argv: ["kubectl", "get", "namespace", "{{ namespace }}"]
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: ns_check
+      failed_when: false
+      changed_when: false
+
+    - name: Create namespace
+      ansible.builtin.command:
+        argv: ["kubectl", "create", "namespace", "{{ namespace }}"]
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      when: ns_check.rc != 0
+
+    - name: Check sensor-secrets
+      ansible.builtin.command:
+        argv: ["kubectl", "-n", "{{ namespace }}", "get", "secret", "sensor-secrets"]
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: sensor_secret
+      failed_when: false
+      changed_when: false
+
+    - name: Classify DEMO_PASSWORD source
+      ansible.builtin.shell: |
+        set -euo pipefail
+        pw="${DEMO_PASSWORD:-}"
+        envfile="${REPO_ROOT}/.env"
+        if [[ -z "${pw}" && -f "${envfile}" ]]; then
+          pw="$(
+            set -a
+            # shellcheck disable=SC1091
+            source "${envfile}"
+            printf '%s' "${DEMO_PASSWORD:-}"
+          )"
+        fi
+        pw="${pw//$'\r'/}"
+        if [[ "${#pw}" -ge 12 ]]; then
+          printf '%s\n' ready
+        elif [[ -n "${pw}" ]]; then
+          printf '%s\n' short
+        else
+          printf '%s\n' missing
+        fi
+      args:
+        executable: /bin/bash
+      environment:
+        REPO_ROOT: "{{ repo_root }}"
+      register: pw_state
+      changed_when: false
+      when: sensor_secret.rc != 0
+
+    - name: Require DEMO_PASSWORD before the first deploy
+      ansible.builtin.assert:
+        that: pw_state.stdout == "ready"
+        fail_msg: >-
+          Secret {{ namespace }}/sensor-secrets is missing.
+          Export DEMO_PASSWORD with at least 12 characters, or put it in .env
+          (state: {{ pw_state.stdout | default('unknown') }}).
+      when: sensor_secret.rc != 0
+
+    - name: Create sensor-secrets
+      ansible.builtin.shell: |
+        set -euo pipefail
+        pw="${DEMO_PASSWORD:-}"
+        envfile="${REPO_ROOT}/.env"
+        if [[ -z "${pw}" && -f "${envfile}" ]]; then
+          set -a
+          # shellcheck disable=SC1091
+          source "${envfile}"
+          set +a
+          pw="${DEMO_PASSWORD:-}"
+        fi
+        pw="${pw//$'\r'/}"
+        printf '%s' "${pw}" | kubectl -n "${NAMESPACE}" create secret generic sensor-secrets \
+          --from-file=DEMO_PASSWORD=/dev/stdin
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+        REPO_ROOT: "{{ repo_root }}"
+        NAMESPACE: "{{ namespace }}"
+      when: sensor_secret.rc != 0
+      no_log: true
+
+    - name: Helm upgrade --install sensor
+      ansible.builtin.command:
+        argv:
+          - helm
+          - upgrade
+          - --install
+          - sensor
+          - "{{ repo_root }}/deploy/helm/sensor-gateway"
+          - --namespace
+          - "{{ namespace }}"
+          - --create-namespace
+          - --set-string
+          - "image.api.tag={{ image_tag }}"
+          - --set-string
+          - "image.web.tag={{ image_tag }}"
+          - --atomic
+          - --wait
+          - --timeout
+          - 5m
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: helm_sensor
+      changed_when: >-
+        'Installing it now' in helm_sensor.stdout or
+        'has been upgraded' in helm_sensor.stdout
+
+    - name: Helm upgrade --install sensor-canary
+      ansible.builtin.command:
+        argv:
+          - helm
+          - upgrade
+          - --install
+          - sensor-canary
+          - "{{ repo_root }}/deploy/helm/sensor-gateway"
+          - --namespace
+          - "{{ namespace }}"
+          - --create-namespace
+          - --set
+          - track=canary
+          - --set
+          - canary.enabled=true
+          - --set
+          - "canary.weight={{ canary_weight }}"
+          - --set-string
+          - "image.api.tag={{ image_tag }}"
+          - --set-string
+          - "image.web.tag={{ image_tag }}"
+          - --atomic
+          - --wait
+          - --timeout
+          - 5m
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      when: lookup('env', 'CANARY') == '1'
+      register: helm_canary
+      changed_when: >-
+        'Installing it now' in helm_canary.stdout or
+        'has been upgraded' in helm_canary.stdout

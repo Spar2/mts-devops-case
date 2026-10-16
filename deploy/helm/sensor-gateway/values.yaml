@@ -1,0 +1,61 @@
+# Stable release (name "sensor"): track=stable and canary.enabled=false.
+# Canary is a second install of this chart, release name "sensor-canary",
+# with track=canary and canary.enabled=true.
+track: stable
+
+image:
+  # latest is pulled every time. A git short sha stays IfNotPresent.
+  pullPolicy: IfNotPresent
+  api:
+    repository: ghcr.io/spar2/mts-devops-case/sensor-gateway
+    tag: latest
+  web:
+    repository: ghcr.io/spar2/mts-devops-case/sensor-web
+    tag: latest
+
+# Optional list of {name: pull-secret} when GHCR is private.
+imagePullSecrets: []
+
+# Existing Secret key DEMO_PASSWORD. The chart does not create the Secret.
+existingSecret: sensor-secrets
+
+env:
+  demoUsername: demo
+  # The string "true" or "false". The API compares SECURE_COOKIES to "true".
+  # localtest.me is plain HTTP, so cookies must not be marked Secure.
+  secureCookies: "false"
+
+ingress:
+  host: sensor.localtest.me
+  className: nginx
+
+canary:
+  enabled: false
+  # Integer 0-100. Used only when track=canary and canary.enabled=true.
+  weight: 10
+
+serviceMonitor:
+  # Rendered only when this is true and the ServiceMonitor CRD is installed.
+  # Label release=mon matches kube-prometheus-stack release "mon".
+  enabled: true
+  interval: 30s
+
+api:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+web:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
