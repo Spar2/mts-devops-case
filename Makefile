@@ -24,7 +24,15 @@ lint:
 # Нужен sudo (k3s ставится в систему), ~10 минут, ориентир 6-8 ГБ RAM.
 TAG ?= $(shell git rev-parse --short=7 HEAD)
 PREFIX ?= ghcr.io/spar2/mts-devops-case
+K3D ?= 0
+ifeq ($(K3D),1)
+export KUBECONFIG ?= $(HOME)/.kube/config
+IMPORT_CMD = k3d image import -c mts
+else
 export KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
+IMPORT_CMD = docker save $(PREFIX)/sensor-gateway:$(TAG) $(PREFIX)/sensor-web:$(TAG) | sudo k3s ctr images import -
+endif
+export K3D
 
 k8s-up:
 	./scripts/k3s-install.sh
@@ -38,7 +46,11 @@ k8s-up:
 k8s-images:
 	docker build -t $(PREFIX)/sensor-gateway:$(TAG) services/api
 	docker build -t $(PREFIX)/sensor-web:$(TAG) apps/web
-	docker save $(PREFIX)/sensor-gateway:$(TAG) $(PREFIX)/sensor-web:$(TAG) | sudo k3s ctr images import -
+ifeq ($(K3D),1)
+	$(IMPORT_CMD) $(PREFIX)/sensor-gateway:$(TAG) $(PREFIX)/sensor-web:$(TAG)
+else
+	$(IMPORT_CMD)
+endif
 
 k8s-deploy:
 	./scripts/deploy.sh $(TAG)

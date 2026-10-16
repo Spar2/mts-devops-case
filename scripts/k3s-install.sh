@@ -149,9 +149,12 @@ install_k3d_cluster() {
       k3d cluster start mts
     fi
   else
+    # K3D_EXTRA_ARGS: e.g. "--k3s-arg --flannel-backend=host-gw@server:0" where vxlan is unavailable.
+    # shellcheck disable=SC2086
     k3d cluster create mts \
       --image "${K3S_IMAGE}" \
       --k3s-arg "--disable=traefik@server:0" \
+      ${K3D_EXTRA_ARGS:-} \
       -p "8081:80@loadbalancer" \
       --kubeconfig-switch-context \
       --wait
@@ -160,6 +163,9 @@ install_k3d_cluster() {
   export KUBECONFIG="${HOME}/.kube/config"
   k3d kubeconfig merge mts --kubeconfig-merge-default --kubeconfig-switch-context
   kubectl config use-context k3d-mts >/dev/null
+  if [[ "${K3D_PRELOAD:-0}" == "1" ]]; then
+    "$(dirname "$0")/k3d-preload-images.sh"
+  fi
 }
 
 wait_for_cluster() {
@@ -193,12 +199,52 @@ install_ingress_nginx() {
     --set controller.kind=Deployment \
     --set controller.hostNetwork=false \
     --set controller.dnsPolicy=ClusterFirst \
-    --set controller.service.type=LoadBalancer \
+    --set controller.service.type="${INGRESS_SERVICE_TYPE:-LoadBalancer}" \
     --set controller.ingressClassResource.name=nginx \
     --set controller.ingressClass=nginx \
     --set controller.ingressClassResource.default=true \
     --wait \
     --timeout 10m
+  wait_for_admission_webhook
+}
+
+# The admission webhook gets its CA from a post-install Job. Until the CA is
+# patched in, every Ingress create fails with "x509: unknown authority".
+# Retry a server-side dry-run Ingress until the webhook accepts it.
+wait_for_admission_webhook() {
+  local probe i
+  probe="$(mktemp)"
+  cat >"${probe}" <<'YAML'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: webhook-probe
+  namespace: default
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: webhook-probe.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: none
+                port:
+                  number: 80
+YAML
+  for i in $(seq 1 60); do
+    if kubectl apply --dry-run=server -f "${probe}" >/dev/null 2>&1; then
+      rm -f "${probe}"
+      echo "ingress-nginx admission webhook ready"
+      return 0
+    fi
+    sleep 3
+  done
+  rm -f "${probe}"
+  echo "ingress-nginx admission webhook not ready after 180s" >&2
+  return 1
 }
 
 install_helm
