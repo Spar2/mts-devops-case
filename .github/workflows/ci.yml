@@ -130,3 +130,72 @@ jobs:
         run: |
           helm lint deploy/helm/sensor-gateway
           helm template sensor deploy/helm/sensor-gateway --namespace sensor
+
+  manifests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Install kubeconform
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          echo "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73  /tmp/kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      - name: Validate chart and monitoring manifests
+        run: |
+          set -euo pipefail
+          schema='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          args=(-strict -summary -kubernetes-version 1.31.0 -schema-location default -schema-location "$schema")
+          # Capabilities.APIVersions.Has is an exact match on
+          # monitoring.coreos.com/v1/ServiceMonitor. The group/version alone
+          # does not render the ServiceMonitor.
+          helm template sensor deploy/helm/sensor-gateway \
+            --namespace sensor \
+            --api-versions monitoring.coreos.com/v1 \
+            --api-versions monitoring.coreos.com/v1/ServiceMonitor \
+            | kubeconform "${args[@]}"
+          helm template sensor-canary deploy/helm/sensor-gateway \
+            --namespace sensor \
+            --api-versions monitoring.coreos.com/v1 \
+            --api-versions monitoring.coreos.com/v1/ServiceMonitor \
+            --set track=canary \
+            --set canary.enabled=true \
+            --set canary.weight=10 \
+            | kubeconform "${args[@]}"
+          # values-kube-prometheus-stack.yaml is Helm values, not a manifest.
+          kubeconform "${args[@]}" \
+            deploy/monitoring/dashboard-configmap.yaml \
+            deploy/monitoring/prometheusrule.yaml
+
+  dockerfiles:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint API Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: services/api/Dockerfile
+          failure-threshold: error
+
+      - name: Lint web Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: apps/web/Dockerfile
+          failure-threshold: error
+
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck
+        run: shellcheck scripts/*.sh
