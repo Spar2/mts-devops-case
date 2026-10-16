@@ -1,0 +1,160 @@
+@use "@carbon/styles/scss/config" with (
+  $css--font-face: false
+);
+@use "@carbon/styles/scss/reset";
+@use "@carbon/styles/scss/theme";
+@use "@carbon/styles/scss/components/button";
+@use "@carbon/styles/scss/components/notification";
+@use "@carbon/styles/scss/components/text-input";
+@use "@carbon/styles/scss/components/tag";
+@use "@carbon/styles/scss/components/loading";
+@use "./theme" as app-theme;
+
+:root {
+  @include theme.theme();
+  --dts-page-background: var(--cds-background);
+  --dts-panel-background: var(--cds-layer-01);
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  src: url("@ibm/plex/IBM-Plex-Mono/fonts/complete/woff2/IBMPlexMono-Regular.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  src: url("@ibm/plex/IBM-Plex-Sans/fonts/complete/woff2/IBMPlexSans-Regular.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 600;
+  src: url("@ibm/plex/IBM-Plex-Sans/fonts/complete/woff2/IBMPlexSans-SemiBold.woff2") format("woff2");
+  font-display: swap;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--dts-page-background);
+  color: var(--cds-text-primary);
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 14px;
+}
+a { color: var(--cds-link-primary); }
+button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--cds-focus);
+  outline-offset: 2px;
+}
+h1 { font-size: 28px; line-height: 1.3; font-weight: 400; }
+h2 { font-size: 18px; line-height: 1.4; font-weight: 600; }
+p { line-height: 1.5; }
+.shell {
+  height: 48px;
+  background: #161616;
+  color: white;
+  display: flex;
+  align-items: stretch;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.brand {
+  padding: 15px 24px;
+  color: white;
+  text-decoration: none;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.shell nav { display: flex; align-items: stretch; }
+.shell nav a {
+  color: #c6c6c6;
+  text-decoration: none;
+  padding: 15px 20px;
+  border-bottom: 3px solid transparent;
+}
+.shell nav a.active {
+  color: white;
+  background: #262626;
+  border-bottom-color: var(--cds-link-primary);
+}
+.local-label {
+  margin-left: auto;
+  padding: 16px 24px;
+  color: #a8a8a8;
+  font-size: 12px;
+}
+.account-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  color: #f4f4f4;
+  button {
+    background: transparent;
+    border: 0;
+    color: #78a9ff;
+    font: inherit;
+    cursor: pointer;
+    min-height: 48px;
+  }
+}
+.page {
+  padding: 24px 32px 48px;
+  max-width: 960px;
+  margin: auto;
+}
+.page-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.review-form {
+  background: var(--dts-panel-background);
+  padding: 24px 16px;
+  max-width: 560px;
+}
+.review-form form {
+  display: grid;
+  gap: 24px;
+  margin-top: 16px;
+}
+.region-panel {
+  background: var(--dts-panel-background);
+  border-top: 1px solid var(--dts-subtle-border);
+  padding: 24px;
+  margin: 24px 0;
+}
+.readings { margin: 16px 0; }
+.readings dt {
+  font-size: 12px;
+  color: var(--cds-text-secondary);
+  margin-top: 12px;
+}
+.readings dd { margin: 4px 0 0; font-size: 14px; }
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  margin: 20px 0;
+}
+.evidence-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  background: var(--dts-panel-background);
+  padding: 20px;
+}
+.evidence-strip strong { display: block; font-size: 20px; font-weight: 400; }
+.evidence-strip span { color: var(--cds-text-secondary); font-size: 12px; }
+@media (max-width: 720px) {
+  .evidence-strip { grid-template-columns: 1fr; }
+  .page { padding: 16px; }
+  .brand { white-space: normal; }
+}

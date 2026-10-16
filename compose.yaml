@@ -1,0 +1,18 @@
+services:
+  api:
+    build: ./services/api
+    env_file: .env
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  web:
+    build: ./apps/web
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      api:
+        condition: service_healthy

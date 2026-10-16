@@ -1,0 +1,30 @@
+{
+  "name": "sensor-platform-demo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build"
+  },
+  "dependencies": {
+    "@carbon/react": "^1.117.0",
+    "@carbon/styles": "^1.97.0",
+    "@ibm/plex": "^6.0.0",
+    "motion": "^13.0.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router-dom": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "sass": "^1.89.0",
+    "typescript": "~5.9.3",
+    "vite": "^8.0.0"
+  }
+}

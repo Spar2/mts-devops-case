@@ -1,0 +1,68 @@
+@use "@carbon/styles/scss/theme";
+@use "@carbon/styles/scss/themes";
+:root {
+  --dts-surface-background: var(--cds-layer-02);
+  --dts-info-background: #edf5ff;
+  --dts-warning-background: #fff8e1;
+  --dts-error-background: #fff1f1;
+  --dts-success-background: #defbe6;
+  --dts-success-text: #0e6027;
+  --dts-chart-series: #0f62fe;
+  --dts-chart-muted: #8d8d8d;
+  --dts-chart-error: #da1e28;
+  --dts-chart-grid: #e0e0e0;
+  --dts-chart-background: var(--cds-background);
+  --dts-subtle-border: #e0e0e0;
+  --dts-strong-border: #c6c6c6;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  @include theme.theme(themes.$g100);
+  --dts-info-background: #001d6c;
+  --dts-warning-background: #302600;
+  --dts-error-background: #520408;
+  --dts-success-background: #0e3118;
+  --dts-success-text: #6fdc8c;
+  --dts-chart-series: #78a9ff;
+  --dts-chart-muted: #c6c6c6;
+  --dts-chart-error: #ff8389;
+  --dts-chart-grid: #525252;
+  --dts-subtle-border: #393939;
+  --dts-strong-border: #525252;
+  color-scheme: dark;
+}
+a { color: var(--cds-link-primary); }
+.theme-switch {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 0;
+  color: var(--cds-text-primary); background: transparent; cursor: pointer;
+  &:hover { background: var(--cds-background-hover); }
+  &:focus-visible { outline: 2px solid var(--cds-focus); outline-offset: -2px; }
+}
+.shell .theme-switch {
+  color: #f4f4f4;
+  &:hover { background: #393939; }
+  &:focus-visible { outline-color: #ffffff; }
+}
+.auth-theme-tools { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.auth-theme-tools > .theme-switch:first-child { margin-left: auto; }
+input, select, textarea { color-scheme: inherit; }
+.uplot { color: var(--cds-text-primary); }
+.uplot .u-cursor-x, .uplot .u-cursor-y { border-color: var(--cds-text-secondary); }
+.uplot .u-select { background: var(--cds-highlight); }
+.case-presentation:not(:fullscreen) .action-row > .theme-switch { display: none; }
+@media print { .theme-switch { display: none; } }
+
+// Carbon inverse notifications are adapted to dark surfaces in this product.
+:root[data-theme="dark"] .cds--inline-notification {
+  --cds-background-inverse: var(--cds-layer-01);
+  --cds-background-inverse-hover: var(--cds-layer-hover-01);
+  --cds-text-inverse: var(--cds-text-primary);
+  --cds-icon-inverse: var(--cds-icon-primary);
+  --cds-link-inverse: var(--cds-link-primary);
+  --cds-link-inverse-hover: var(--cds-link-primary-hover);
+  --cds-support-info-inverse: var(--cds-support-info);
+  --cds-support-success-inverse: var(--cds-support-success);
+  --cds-support-warning-inverse: var(--cds-support-warning);
+  --cds-support-error-inverse: var(--cds-support-error);
+}
