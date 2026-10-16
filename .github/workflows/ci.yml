@@ -4,7 +4,20 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ruff==0.8.4
+      - run: ruff check services/api
+
   api:
     runs-on: ubuntu-24.04
     steps:
@@ -12,8 +25,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -r requirements.txt
-        working-directory: services/api
+      - run: python -m pip install -r services/api/requirements.txt
       - run: python -m pytest
         working-directory: services/api
         env:
@@ -28,27 +40,93 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
-      - run: npm ci
-        working-directory: apps/web
-      - run: npm run build
+      - run: npm ci && npm run build
         working-directory: apps/web
 
   images:
-    needs: [api, web]
+    needs: [lint, api, web]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # GHCR repository names must be lowercase.
+      API_IMAGE: ghcr.io/spar2/mts-devops-case/sensor-gateway
+      WEB_IMAGE: ghcr.io/spar2/mts-devops-case/sensor-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image tag
+        id: tag
+        run: echo "sha=$(git rev-parse --short=7 HEAD | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build sensor-gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: services/api
+          load: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ steps.tag.outputs.sha }}
+            ${{ env.API_IMAGE }}:latest
+
+      - name: Build sensor-web
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/web
+          load: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:${{ steps.tag.outputs.sha }}
+            ${{ env.WEB_IMAGE }}:latest
+
+      - name: Scan sensor-gateway
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.API_IMAGE }}:${{ steps.tag.outputs.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Scan sensor-web
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.WEB_IMAGE }}:${{ steps.tag.outputs.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Log in to GHCR
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push images
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          docker push "${API_IMAGE}:${SHA}"
+          docker push "${API_IMAGE}:latest"
+          docker push "${WEB_IMAGE}:${SHA}"
+          docker push "${WEB_IMAGE}:latest"
+
+  helm:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t sensor-gateway:ci ./services/api
-      - run: docker build -t sensor-web:ci ./apps/web
-      - uses: aquasecurity/trivy-action@0.28.0
+
+      - name: Set up Helm
+        if: ${{ hashFiles('deploy/helm/sensor-gateway/**', 'deploy/helm/sensor-gateway/*') != '' }}
+        uses: azure/setup-helm@v4
         with:
-          image-ref: sensor-gateway:ci
-          severity: HIGH,CRITICAL
-          exit-code: "1"
-          ignore-unfixed: true
-      - uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: sensor-web:ci
-          severity: HIGH,CRITICAL
-          exit-code: "1"
-          ignore-unfixed: true
+          version: v3.16.3
+
+      - name: Lint and template chart
+        if: ${{ hashFiles('deploy/helm/sensor-gateway/**', 'deploy/helm/sensor-gateway/*') != '' }}
+        run: |
+          helm lint deploy/helm/sensor-gateway
+          helm template sensor deploy/helm/sensor-gateway --namespace sensor
