@@ -76,8 +76,10 @@ Terraform, Ansible, k3s, Helm, Prometheus и Grafana в запуске этой 
 
 Проверяющие работают в Ubuntu. Нужны Git, Docker и Docker Compose.
 
+Репозиторий приватный: жюри клонирует его под GitHub-аккаунтом, которому выдан доступ (HTTPS с токеном или SSH-ключ).
+
 ```bash
-git clone https://github.com/werd0y45/mts-devops-case.git
+git clone https://github.com/Spar2/mts-devops-case.git
 cd mts-devops-case
 make up
 ```
