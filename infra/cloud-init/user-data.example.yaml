@@ -1,0 +1,75 @@
+#cloud-config
+# Terraform template (templatefile). Rendered example: user-data.example.yaml.
+# github_token is injected by Terraform and is never hardcoded in git.
+hostname: mts-sensor
+manage_etc_hosts: true
+ssh_pwauth: false
+package_update: true
+packages:
+  - git
+  - make
+  - curl
+  - docker.io
+  - docker-compose-v2
+# docker group must exist before useradd --groups. docker.io reuses it.
+groups:
+  - docker
+# ubuntu is the default user of the Ubuntu 24.04 cloud image.
+# "default" keeps sudo, shell and the distro groups; this entry adds docker
+# and, when set, the SSH key. runcmd repeats usermod because group membership
+# is not applied to a user that already exists.
+users:
+  - default
+  - name: ubuntu
+    groups: [docker]
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderKeyForCloudInitSchemaOnly jury@example
+write_files:
+  - path: /root/.config/mts/github-token
+    owner: root:root
+    permissions: "0600"
+    content: |
+      __GITHUB_TOKEN__
+# runcmd is written in the config stage and executed by scripts-user
+# in the final stage, after packages are installed.
+runcmd:
+  - |
+    bash -euo pipefail <<'EOS' >>/var/log/mts-k8s-up.log 2>&1
+    set -euo pipefail
+    echo "=== mts-k8s-up start $(date -Is) ==="
+    trap 'rm -f /home/ubuntu/.netrc /root/.config/mts/github-token' EXIT
+    usermod -aG docker ubuntu
+    systemctl enable --now docker
+    install -d -o ubuntu -g ubuntu -m 0755 /home/ubuntu
+    token="$(tr -d '\n' </root/.config/mts/github-token)"
+    rm -f /root/.config/mts/github-token
+    repo_url='https://github.com/Spar2/mts-devops-case.git'
+    dest=/home/ubuntu/mts-devops-case
+    git --version
+    make --version
+    docker --version
+    docker compose version || echo "docker compose plugin not reported"
+    if [ ! -d "$dest/.git" ]; then
+      if [ -n "$token" ]; then
+        host="$(printf '%s\n' "$repo_url" | sed -n 's#^[a-zA-Z][a-zA-Z0-9+.-]*://\([^/@]*@\)\?\([^/:]*\).*#\2#p')"
+        if [ -z "$host" ]; then
+          echo "github_token is set but repo_url is not https: $repo_url" >&2
+          exit 1
+        fi
+        tmp="$(mktemp)"
+        printf 'machine %s\nlogin x-access-token\npassword %s\n' "$host" "$token" >"$tmp"
+        install -o ubuntu -g ubuntu -m 0600 "$tmp" /home/ubuntu/.netrc
+        rm -f "$tmp"
+      fi
+      unset token
+      echo "clone $repo_url -> $dest"
+      sudo -u ubuntu -H env GIT_TERMINAL_PROMPT=0 git clone -- "$repo_url" "$dest"
+      rm -f /home/ubuntu/.netrc
+    else
+      unset token
+      echo "repository already present: $dest"
+    fi
+    echo "make k8s-up as ubuntu"
+    sudo -u ubuntu -H bash -lc 'cd /home/ubuntu/mts-devops-case && make k8s-up'
+    echo "=== mts-k8s-up done $(date -Is) ==="
+    EOS
