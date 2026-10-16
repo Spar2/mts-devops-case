@@ -192,7 +192,13 @@ install_ingress_nginx() {
   helm repo update ingress-nginx || helm repo update
   # Controller is a Deployment with a LoadBalancer Service, not hostNetwork.
   # k3s ServiceLB (left enabled) assigns the external address.
+  local digest_args=()
+  if [[ "${K3D_PRELOAD:-0}" == "1" ]]; then
+    # Preloaded images are imported by tag; digest-pinned refs would force a registry pull.
+    digest_args=(--set controller.image.digest= --set controller.admissionWebhooks.patch.image.digest=)
+  fi
   helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+    "${digest_args[@]}" \
     --version "${INGRESS_NGINX_VERSION}" \
     --namespace ingress-nginx \
     --create-namespace \

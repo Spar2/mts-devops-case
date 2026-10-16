@@ -55,7 +55,10 @@ endif
 k8s-deploy:
 	./scripts/deploy.sh $(TAG)
 
+# Метрический гейт canary читает Prometheus по PROM_URL (по умолчанию port-forward на 9090).
 k8s-canary:
+	@pgrep -f "port-forward svc/mon-kube-prometheus-stack-prometheus" >/dev/null || \
+	  (kubectl -n monitoring port-forward svc/mon-kube-prometheus-stack-prometheus 9090:9090 >/dev/null 2>&1 &) ; sleep 2
 	./scripts/canary.sh $(TAG)
 
 k8s-rollback-demo:
