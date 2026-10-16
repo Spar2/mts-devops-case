@@ -1,0 +1,27 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: sensor-gateway
+  namespace: monitoring
+  labels:
+    release: mon
+spec:
+  groups:
+    - name: sensor-gateway
+      rules:
+        - alert: SensorGatewayDown
+          expr: (sum(up{namespace="sensor", service=~".*-api"}) or vector(0)) == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "sensor-gateway: API не отвечает"
+            description: "В namespace sensor уже минуту нет ни одного живого target Service *-api (stable sensor-api и канарейка sensor-canary-api). sum(up) равен 0, в том числе когда поды сняты и ряд up исчез."
+        - alert: SensorGatewaySlowProbe
+          expr: service_probe_latency_seconds > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "sensor-gateway: медленная проверка службы"
+            description: "service_probe_latency_seconds больше 0.5 с уже 5 минут. Это задержка последнего POST /api/v1/service/probe из окна «Служба»."

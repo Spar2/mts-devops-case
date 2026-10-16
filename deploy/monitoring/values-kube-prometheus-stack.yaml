@@ -1,0 +1,132 @@
+# kube-prometheus-stack 65.1.1 (Prometheus Operator v0.77.1, Grafana chart 8.5.*).
+# Release name: mon. Namespace: monitoring.
+# One small node (k3s or k3d). Install: scripts/monitoring-install.sh.
+#
+# etcd, kube-controller-manager, kube-scheduler and kube-proxy are not scraped:
+# k3s does not expose them as separate endpoints, and the matching default rules
+# would stay firing. node-exporter stays on.
+
+crds:
+  enabled: true
+
+defaultRules:
+  create: true
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+    windows: false
+
+windowsMonitoring:
+  enabled: false
+
+kubeEtcd:
+  enabled: false
+
+kubeControllerManager:
+  enabled: false
+
+kubeScheduler:
+  enabled: false
+
+kubeProxy:
+  enabled: false
+
+nodeExporter:
+  enabled: true
+
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    replicas: 1
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+grafana:
+  enabled: true
+  defaultDashboardsEnabled: true
+  # Demo login: admin / admin.
+  # Grafana 8.5 stores adminPassword in its own Secret. To use a prepared Secret
+  # instead, set admin.existingSecret and drop adminPassword. Keys: admin-user,
+  # admin-password.
+  adminUser: admin
+  adminPassword: admin
+  admin:
+    existingSecret: ""
+    userKey: admin-user
+    passwordKey: admin-password
+  persistence:
+    enabled: false
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - grafana.localtest.me
+    path: /
+    pathType: Prefix
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+
+prometheus:
+  prometheusSpec:
+    retention: 1d
+    replicas: 1
+    # Soft anti-affinity refuses nothing, but an empty value keeps a single node quiet.
+    podAntiAffinity: ""
+    walCompression: true
+    # Empty selectors: load ServiceMonitors and PrometheusRules from every namespace,
+    # including the sensor chart (namespace sensor) and release: mon rules.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 192Mi
+
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 24Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
