@@ -67,7 +67,7 @@ Compose-режим проще: браузер → nginx (`web`, порт 8080) �
 
 | Инструмент | Версия |
 | --- | --- |
-| Python / FastAPI / Uvicorn | 3.12 (`python:3.12-slim-bookworm`) / 0.121.3 (Starlette 0.50.0) / 0.34.0 |
+| Python / FastAPI / Uvicorn | 3.12 (`python:3.12-slim-bookworm`) / 0.143.3 (Starlette 1.8.0) / 0.34.0 |
 | Node.js / Vite / React | 24 / 8 / 19 |
 | nginx | 1.27-alpine |
 | Docker Compose | V2 (проверено на 2.30.3) |

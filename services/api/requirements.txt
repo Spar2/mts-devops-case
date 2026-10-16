@@ -1,5 +1,5 @@
-fastapi==0.121.3
-starlette==0.50.0
+fastapi==0.143.3
+starlette==1.8.0
 uvicorn==0.34.0
 httpx==0.28.1
 pytest==8.3.4
