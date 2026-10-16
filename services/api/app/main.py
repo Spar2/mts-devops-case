@@ -1,5 +1,8 @@
 import asyncio
+import base64
 import hashlib
+import hmac
+import json
 import math
 import os
 import secrets
@@ -13,6 +16,7 @@ from pydantic import BaseModel
 _LOGIN_LIMIT = 30
 _LOGIN_WINDOW_S = 60.0
 _PROBE_SLEEP_S = 0.01
+_B64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 
 class LoginBody(BaseModel):
@@ -28,11 +32,13 @@ class _Settings:
         display_name: str,
         session_ttl_s: int,
         secure_cookies: bool,
+        signing_key: bytes,
     ) -> None:
         self.username = username
         self.display_name = display_name
         self.session_ttl_s = session_ttl_s
         self.secure_cookies = secure_cookies
+        self.signing_key = signing_key
         self._password = password
 
     def username_ok(self, offered: str) -> bool:
@@ -46,21 +52,48 @@ class _Settings:
 
 
 class _Session:
-    def __init__(self, username: str, display_name: str, expires_at: float) -> None:
+    def __init__(self, username: str, display_name: str) -> None:
         self.username = username
         self.display_name = display_name
         self.role = "analyst"
-        self.expires_at = expires_at
 
 
 def _equals(left: str, right: str) -> bool:
     return secrets.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
 
 
+def _unauthorized() -> HTTPException:
+    return HTTPException(status_code=401, detail="Not authenticated")
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(text: str) -> bytes | None:
+    if not text or any(char not in _B64URL_ALPHABET for char in text):
+        return None
+    padded = text + ("=" * (-len(text) % 4))
+    try:
+        return base64.urlsafe_b64decode(padded.encode("ascii"))
+    except ValueError:
+        return None
+
+
+def _signing_key(session_secret: str, password: str) -> bytes:
+    # sha256((SESSION_SECRET or "") + NUL + DEMO_PASSWORD). Every pod with the
+    # same values accepts the cookie. Rotating DEMO_PASSWORD changes the key.
+    material = session_secret.encode("utf-8") + b"\0" + password.encode("utf-8")
+    return hashlib.sha256(material).digest()
+
+
 def _settings_from_env() -> _Settings:
     raw_password = os.environ.get("DEMO_PASSWORD")
     if raw_password is None or len(raw_password) < 12:
         raise RuntimeError("DEMO_PASSWORD must be set and at least 12 characters")
+    session_secret = os.environ.get("SESSION_SECRET", "")
+    if session_secret and len(session_secret) < 16:
+        raise RuntimeError("SESSION_SECRET must be at least 16 characters when set")
     username = os.environ.get("DEMO_USERNAME", "demo").strip().lower()
     display_name = os.environ.get("DEMO_DISPLAY_NAME", "Демо-участник")
     try:
@@ -70,11 +103,56 @@ def _settings_from_env() -> _Settings:
     if session_ttl_s <= 0:
         raise RuntimeError("SESSION_TTL_S must be positive")
     secure_cookies = os.environ.get("SECURE_COOKIES", "false") == "true"
-    return _Settings(username, raw_password, display_name, session_ttl_s, secure_cookies)
+    return _Settings(
+        username,
+        raw_password,
+        display_name,
+        session_ttl_s,
+        secure_cookies,
+        _signing_key(session_secret, raw_password),
+    )
 
 
-def _token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+def _issue_token(username: str, ttl_s: int, key: bytes) -> str:
+    # token = base64url(json{u, exp}) + "." + base64url(HMAC-SHA256(key, body))
+    payload = json.dumps(
+        {"u": username, "exp": time.time() + ttl_s},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    body = _b64url_encode(payload)
+    signature = hmac.new(key, body.encode("ascii"), hashlib.sha256).digest()
+    return f"{body}.{_b64url_encode(signature)}"
+
+
+def _username_from_token(token: str, key: bytes) -> str:
+    parts = token.split(".")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise _unauthorized()
+    body, presented_sig = parts
+    presented = _b64url_decode(presented_sig)
+    if presented is None or any(char not in _B64URL_ALPHABET for char in body):
+        raise _unauthorized()
+    expected = hmac.new(key, body.encode("ascii"), hashlib.sha256).digest()
+    if len(presented) != len(expected) or not secrets.compare_digest(expected, presented):
+        raise _unauthorized()
+    raw = _b64url_decode(body)
+    if raw is None:
+        raise _unauthorized()
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        raise _unauthorized() from None
+    if not isinstance(payload, dict):
+        raise _unauthorized()
+    username = payload.get("u")
+    exp = payload.get("exp")
+    if not isinstance(username, str) or not username:
+        raise _unauthorized()
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)) or not math.isfinite(exp):
+        raise _unauthorized()
+    if exp <= time.time():
+        raise _unauthorized()
+    return username
 
 
 def _synthetic_reading(now: float) -> dict[str, float | str]:
@@ -91,14 +169,10 @@ def _synthetic_reading(now: float) -> dict[str, float | str]:
 def _session(request: Request) -> _Session:
     token = request.cookies.get("dts_session")
     if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    state = request.app.state
-    record = state.sessions.get(_token_hash(token))
-    if record is None or record.expires_at <= time.monotonic():
-        if record is not None:
-            state.sessions.pop(_token_hash(token), None)
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return record
+        raise _unauthorized()
+    settings: _Settings = request.app.state.settings
+    username = _username_from_token(token, settings.signing_key)
+    return _Session(username, settings.display_name)
 
 
 def _login_limited(state, host: str) -> bool:
@@ -162,7 +236,6 @@ def create_app() -> FastAPI:
     app.state.probe_count = 0
     app.state.last_probe_ms = None
     app.state.probe_latency_seconds = 0.0
-    app.state.sessions = {}
     app.state.login_attempts = defaultdict(deque)
 
     @app.middleware("http")
@@ -190,12 +263,7 @@ def create_app() -> FastAPI:
         current = request.app.state.settings
         if not (current.username_ok(body.username) and current.password_ok(body.password)):
             raise HTTPException(status_code=401, detail="Incorrect username or password")
-        token = secrets.token_urlsafe(32)
-        request.app.state.sessions[_token_hash(token)] = _Session(
-            username=current.username,
-            display_name=current.display_name,
-            expires_at=time.monotonic() + current.session_ttl_s,
-        )
+        token = _issue_token(current.username, current.session_ttl_s, current.signing_key)
         response = JSONResponse(
             {"display_name": current.display_name, "role": "analyst"}
         )
@@ -204,9 +272,11 @@ def create_app() -> FastAPI:
 
     @app.post("/api/v1/auth/logout")
     async def logout(request: Request) -> JSONResponse:
-        token = request.cookies.get("dts_session")
-        if token:
-            request.app.state.sessions.pop(_token_hash(token), None)
+        """Clear the dts_session cookie.
+
+        The token is stateless. A copy stays valid until exp or until
+        DEMO_PASSWORD rotation changes the signing key.
+        """
         response = JSONResponse({"signed_out": True})
         _clear_session_cookie(response, request.app.state.settings)
         return response

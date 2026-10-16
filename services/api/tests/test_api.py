@@ -105,9 +105,11 @@ def test_logout_then_me_401(client: TestClient) -> None:
     assert logged_out.status_code == 200
     assert logged_out.json() == {"signed_out": True}
     assert client.get("/api/v1/auth/me").status_code == 401
+    # Stateless: logout only clears this client's cookie. The token stays valid
+    # until exp or DEMO_PASSWORD rotation, including on the same process.
     reused = TestClient(client.app)
     reused.cookies.set("dts_session", token)
-    assert reused.get("/api/v1/auth/me").status_code == 401
+    assert reused.get("/api/v1/auth/me").status_code == 200
 
 
 def test_metrics_contains_service_up(client: TestClient) -> None:
@@ -136,3 +138,47 @@ def test_create_app_rejects_short_or_missing_password(monkeypatch: pytest.Monkey
     monkeypatch.delenv("DEMO_PASSWORD")
     with pytest.raises(RuntimeError):
         create_app()
+
+
+def test_cookie_accepted_by_second_app_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEMO_PASSWORD", "demo-password-ok")
+    monkeypatch.setenv("SESSION_SECRET", "shared-session-secret")
+    first = TestClient(create_app())
+    login = _login(first)
+    assert login.status_code == 200
+    token = login.cookies["dts_session"]
+    second = TestClient(create_app())
+    second.cookies.set("dts_session", token)
+    response = second.get("/api/v1/auth/me")
+    assert response.status_code == 200
+    assert response.json()["username"] == "demo"
+    assert response.json()["role"] == "analyst"
+    assert second.get("/api/v1/service").status_code == 200
+
+
+def test_cookie_rejected_after_demo_password_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SESSION_SECRET", "shared-session-secret")
+    monkeypatch.setenv("DEMO_PASSWORD", "demo-password-ok")
+    first = TestClient(create_app())
+    token = _login(first).cookies["dts_session"]
+    monkeypatch.setenv("DEMO_PASSWORD", "rotated-password")
+    second = TestClient(create_app())
+    second.cookies.set("dts_session", token)
+    assert second.get("/api/v1/auth/me").status_code == 401
+    assert _login(second, password="rotated-password").status_code == 200
+
+
+def test_tampered_session_token_rejected(client: TestClient) -> None:
+    token = _login(client).cookies["dts_session"]
+    body, signature = token.split(".", 1)
+    flipped_sig = ("A" if signature[:1] != "A" else "B") + signature[1:]
+    fresh = TestClient(client.app)
+    fresh.cookies.set("dts_session", f"{body}.{flipped_sig}")
+    assert fresh.get("/api/v1/auth/me").status_code == 401
+    flipped_body = ("A" if body[:1] != "A" else "B") + body[1:]
+    fresh.cookies.set("dts_session", f"{flipped_body}.{signature}")
+    assert fresh.get("/api/v1/auth/me").status_code == 401
+    fresh.cookies.set("dts_session", "not-a-valid-token")
+    assert fresh.get("/api/v1/auth/me").status_code == 401
+    fresh.cookies.set("dts_session", f"{body}.")
+    assert fresh.get("/api/v1/auth/me").status_code == 401

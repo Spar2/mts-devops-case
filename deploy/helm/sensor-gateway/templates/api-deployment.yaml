@@ -57,6 +57,12 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.existingSecret }}
                   key: DEMO_PASSWORD
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret }}
+                  key: SESSION_SECRET
+                  optional: true
             - name: SECURE_COOKIES
               value: {{ .Values.env.secureCookies | quote }}
             - name: PYTHONDONTWRITEBYTECODE
