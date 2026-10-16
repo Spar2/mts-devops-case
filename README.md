@@ -69,7 +69,7 @@ Compose-режим проще: браузер → nginx (`web`, порт 8080) �
 | --- | --- |
 | Python / FastAPI / Uvicorn | 3.12 (`python:3.12-slim-bookworm`) / 0.143.3 (Starlette 1.8.0) / 0.34.0 |
 | Node.js / Vite / React | 24 / 8 / 19 |
-| nginx | 1.27-alpine |
+| nginx | 1.29-alpine + `apk upgrade` |
 | Docker Compose | V2 (проверено на 2.30.3) |
 | GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0` (HIGH, CRITICAL) |
 | k3s | v1.31.4+k3s1, traefik отключён (локально проверено в k3d v5.7.5) |
