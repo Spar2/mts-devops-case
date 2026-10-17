@@ -113,7 +113,7 @@ flowchart LR
 | SOPS / age | 3.9.2 / 1.2.1 |
 | Ansible | ansible-core 2.17.14 (syntax-check в CI; полный прогон плейбука раньше на 2.17.5, `failed=0`) |
 | Terraform / провайдер | 1.9.8 / dmacvicar/libvirt 0.8.3. Lock-файл `infra/terraform/.terraform.lock.hcl` (в `versions.tf`: `>= 1.6`, `~> 0.8.1`) |
-| cloud-init | 26.1, пакет `26.1-0ubuntu1~24.04.1` (схема примера рендера и network-config; раньше также 25.1). `user-data.yaml.tftpl` — шаблон Terraform, в схему не подаётся |
+| cloud-init | 26.1 (в CI — пакет из архива ubuntu-24.04, версия печатается в лог) (схема примера рендера и network-config; раньше также 25.1). `user-data.yaml.tftpl` — шаблон Terraform, в схему не подаётся |
 | Локальная LLM (опц.) | llama.cpp server `b11681`, модель Ternary-Bonsai-2-4B Q2_0 (Apache-2.0), promtool из `prom/prometheus:v2.54.1` |
 | GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0` (Trivy v0.70.0, образы и config), `hashicorp/setup-terraform@v4.0.1` (Terraform 1.9.8), ansible-core 2.17.14, cloud-init 26.1, `anchore/sbom-action@v0.17.8`, kubeconform 0.6.7, `hadolint/hadolint-action@v3.1.0`, shellcheck (из образа раннера) |
 | Приёмник алертов | `mendhak/http-https-echo:34` |

@@ -99,7 +99,7 @@ terraform -chdir=infra/terraform validate
 cloud-init schema -c infra/cloud-init/user-data.example.yaml
 ```
 
-Те же команды и `cloud-init schema --schema-type network-config` выполняет job `iac` в `.github/workflows/ci.yml` (Terraform 1.9.8, cloud-init `26.1-0ubuntu1~24.04.1`). `user-data.yaml.tftpl` в `cloud-init schema` не проходит: это шаблон `templatefile`, не готовый cloud-config.
+Те же команды и `cloud-init schema --schema-type network-config` выполняет job `iac` в `.github/workflows/ci.yml` (Terraform 1.9.8, cloud-init из архива Ubuntu 24.04, локально проверено 26.1). `user-data.yaml.tftpl` в `cloud-init schema` не проходит: это шаблон `templatefile`, не готовый cloud-config.
 
 - `terraform validate` проверяет синтаксис HCL, ссылки между ресурсами и аргументы провайдера `dmacvicar/libvirt` `~> 0.8.1`: один домен, 4 vCPU, 8192 МиБ, том 30 ГиБ, cloud-init из `user-data.yaml.tftpl`.
 - `cloud-init schema` сверяет пример рендера со схемой cloud-config. В примере URL репозитория, плейсхолдер `__GITHUB_TOKEN__` и строка-заглушка SSH-ключа. Это вход для схемы, не секрет и не ключ доступа. На хосте без datasource cloud-init пишет предупреждение и при успехе печатает `Valid schema`.

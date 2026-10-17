@@ -165,7 +165,8 @@ jobs:
       - name: cloud-init schema
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y 'cloud-init=26.1-0ubuntu1~24.04.1'
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cloud-init
+          # Версия из archive ubuntu-24.04 (точный пин apt ломается при обновлении архива); печатается в лог.
           cloud-init --version
           # user-data.yaml.tftpl — шаблон templatefile (%{ if }, ${...}), не cloud-config.
           # Схема проверяет пример рендера и network-config.
