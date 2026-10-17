@@ -1,0 +1,7 @@
+# DS-0002: apps/web/Dockerfile (nginx:1.29-alpine) не задаёт USER.
+# Мастер nginx стартует от root, чтобы занять :80 и сделать setuid воркерам.
+# USER nginx сломал бы порт 80 в Compose и в чарте (containerPort 80,
+# capabilities CHOWN, SETUID, SETGID, NET_BIND_SERVICE, DAC_OVERRIDE).
+# В поде уже стоит readOnlyRootFilesystem, drop ALL, seccomp RuntimeDefault, без токена ServiceAccount.
+# Это исключение только для misconfig Dockerfile. Скан CVE образа (job images) его не читает как CVE.
+DS-0002
