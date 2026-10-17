@@ -8,9 +8,9 @@
 
 Что есть на самом деле:
 
-- **CI (GitHub Actions, `ci.yml`).** На каждый push: линт, тесты, проверки манифестов, сборка, Trivy, SBOM. Из `main` образы пушатся в приватный GHCR.
+- **CI (GitHub Actions, `ci.yml`).** На каждый push и pull request: линт, тесты, проверки манифестов, сборка, Trivy. Только на `main`: SBOM и push образов в приватный GHCR.
 - **CD.** Выкладка в кластер идёт командами `make up`, `make k8s-deploy` и `make k8s-canary`: Helm `--atomic`, smoke, canary через ingress-nginx с PromQL-гейтом и автооткатом. По умолчанию образы собираются локально из того же коммита.
-- **e2e в Actions (`e2e.yml`).** На каждый push весь путь `make up` и все демо прогоняются на GitHub-раннере в двух вариантах: k3d и нативный k3s.
+- **e2e в Actions (`e2e.yml`).** На каждый push в `main`, кроме правок только `*.md`/`docs/` (и вручную через `workflow_dispatch`), весь путь `make up` и все демо прогоняются на GitHub-раннере в двух вариантах: k3d и нативный k3s.
 - **Без CD-деплоя из Actions.** Отдельного деплоя в постоянный кластер из Actions нет: у проекта нет постоянного кластера, доступного GitHub.
 
 ## Описание проблемы
@@ -112,7 +112,7 @@ flowchart LR
 | kube-prometheus-stack | чарт 65.1.1, https://prometheus-community.github.io/helm-charts (Prometheus 2.54.1, Grafana 11.2.1, Alertmanager 0.27.0) |
 | SOPS / age | 3.9.2 / 1.2.1 |
 | Ansible | ansible-core 2.17 (проверено 2.17.5) |
-| Terraform / провайдер | 1.9.8 / dmacvicar/libvirt 0.8.3 (`~> 0.8.1`) |
+| Terraform / провайдер | проверено на 1.9.8 / dmacvicar/libvirt 0.8.3; в `versions.tf` ограничения `>= 1.6` и `~> 0.8.1`, lock-файла нет |
 | cloud-init | схема проверена cloud-init 25.1 |
 | Локальная LLM (опц.) | llama.cpp server `b11681`, модель Ternary-Bonsai-2-4B Q2_0 (Apache-2.0), promtool из `prom/prometheus:v2.54.1` |
 | GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0` (Trivy v0.70.0), `anchore/sbom-action@v0.17.8`, kubeconform 0.6.7, `hadolint/hadolint-action@v3.1.0`, shellcheck (из образа раннера) |
@@ -130,7 +130,7 @@ flowchart LR
 | ВМ из `infra/terraform` | 8 ГиБ по умолчанию (`vm_memory_mib`) | 4 vCPU | 30 ГиБ |
 
 Лимиты: API — requests 50m/128Mi, limits 500m/256Mi; web — 25m/64Mi и 200m/128Mi (`values.yaml`). У компонентов kube-prometheus-stack
-лимиты заданы в `values-kube-prometheus-stack.yaml`. У ingress-nginx и alert-sink лимитов нет (значения чартов по умолчанию).
+лимиты заданы в `values-kube-prometheus-stack.yaml`. У alert-sink — 10m/32Mi и 100m/64Mi (`alert-sink.yaml`). У ingress-nginx ресурсы не задаются (значения чарта по умолчанию, без limits).
 
 ## Как запустить (git clone …; make up)
 
@@ -156,9 +156,9 @@ make up
 
 1. `scripts/k3s-install.sh` — проверяет зависимости, ставит pinned helm v3.16.3 / kubectl v1.31.4 / k3d v5.8.3, создаёт
    k3d-кластер `mts` (k3s v1.31.4 в Docker), ставит ingress-nginx 4.11.3 и ждёт готовности его admission webhook;
-2. `scripts/secrets-init.sh` + `secrets-apply.sh` — ставит sops/age, генерирует ключ age этой машины и зашифрованный Secret;
-3. `scripts/monitoring-install.sh` — kube-prometheus-stack 65.1.1, дашборд, правила алертов, приёмник алертов `alert-sink`;
-4. сборка образов из исходников и `k3d image import` — **доступ к приватному GHCR не нужен**;
+2. `scripts/secrets-init.sh` + `secrets-apply.sh` — ставит sops/age, генерирует ключ age этой машины и два зашифрованных Secret: `sensor-secrets` (пароль входа, ключ сессий) и `grafana-admin`;
+3. сборка образов из исходников и `k3d image import` (до мониторинга — ниже пик RAM) — **доступ к приватному GHCR не нужен**;
+4. `scripts/monitoring-install.sh` — kube-prometheus-stack 65.1.1, дашборд, правила алертов, приёмник алертов `alert-sink`;
 5. `scripts/deploy.sh` — Helm-релиз `sensor` (`--atomic`) и smoke-проверка; при провале — `helm rollback`;
 6. `make status` — печатает адреса и пароль входа.
 
@@ -266,8 +266,9 @@ make down                # удалить кластер (и Compose-демо, �
 - kubeconfig нативного k3s: `/etc/rancher/k3s/k3s.yaml` с правами 600, копия пользователю в `~/.kube/config` (600).
 - Supply chain: Trivy до push; SBOM (SPDX JSON, `anchore/sbom-action`) обоих образов — артефакт прогона CI на `main`. Подпись cosign keyless
   сознательно не используется: запись в публичный Rekor раскрыла бы имя приватного репозитория.
-- Cloud-init: GitHub-токен для приватного репо передаётся через Terraform (`sensitive`) и удаляется из файловой системы ВМ
-  после клонирования. Но он остаётся в ISO cloud-init (user-data) и в state Terraform: `*.tfstate` в `.gitignore`, токен
+- Cloud-init: GitHub-токен для приватного репо передаётся через Terraform (`sensitive`) ; после клонирования скрипт удаляет
+  `.netrc` и файл токена. Но токен остаётся в ISO cloud-init, в копии user-data, которую cloud-init хранит на диске гостя
+  (`/var/lib/cloud/instance/`), и в state Terraform: `*.tfstate` в `.gitignore`, токен
   лучше брать fine-grained, только на чтение и на короткий срок.
 
 ## Использование LLM
@@ -367,8 +368,8 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; `
 - API не проходит healthcheck — в `.env` пароль короче 12 символов: `docker compose logs api`.
 - После входа снова форма — открывать именно `http://127.0.0.1:8080`, не файл и не другой хост.
 - Образ не собирается — нужен BuildKit и Compose V2 (есть в Ubuntu 24.04).
-- `make k8s-up` падает на установке k3s — нужен sudo и доступ к get.k3s.io; повторный запуск идемпотентен.
-- Поды в `ImagePullBackOff` — образы приложения не импортированы: `make k8s-images`; при закрытом egress — `K3D_PRELOAD=1`.
+- `make up K3D=0` падает на установке k3s — нужен sudo и доступ к get.k3s.io (режим k3d по умолчанию get.k3s.io не использует); повторный запуск идемпотентен.
+- Поды в `ImagePullBackOff` — образы приложения не импортированы: `make k8s-images`; при закрытом egress из подов `K3D_PRELOAD=1` подгружает в k3d сторонние образы (ingress-nginx, мониторинг, alert-sink), образы приложения всегда импортирует `make k8s-images`.
 - `sensor.localtest.me` не открывается — DNS не отдаёт 127.0.0.1: добавить `127.0.0.1 sensor.localtest.me grafana.localtest.me` в `/etc/hosts`.
 - Smoke падает на входе после смены секрета — Secret читается подами при старте; `scripts/secrets-apply.sh` сам делает `rollout restart`.
 - `Ключ age этой машины не совпадает с получателем` — файл зашифрован другим ключом: удалить `deploy/secrets/sensor-secrets.enc.yaml`
