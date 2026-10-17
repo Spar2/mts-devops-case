@@ -10,6 +10,8 @@
 3. `rule2`: «critical, если process_resident_memory_bytes > 400MB в течение 10m».
 4. `explain`: объяснить провал canary и откат по логу `llm/examples/canary-fail.log` (выдержка из `docs/cd-demo-log.md`).
 
+Задачи выше — снимок замера. `process_resident_memory_bytes` и метки `status`/`path` у `http_requests_total` сервис не отдаёт: `/metrics` в `services/api/app/main.py` пишет сам, без `prometheus_client` и process collector. Текущий список в `llm/llm_gen.py`: `up`, `service_up`, `service_probe_latency_seconds`, `http_requests_total`.
+
 «Валидно» = прошёл YAML + структура + `release: mon` + `promtool check rules` (Prometheus v2.54.1), допускался один
 раунд исправления по ошибкам валидатора. «Смысл» — ручная проверка выражения человеком.
 

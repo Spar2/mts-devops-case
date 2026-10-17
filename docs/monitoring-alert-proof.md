@@ -1,6 +1,6 @@
 # Проверка алерта SensorGatewayDown (k3d, 2026-10-17 MSK)
 
-Стенд: k3d v5.7.5 (k3s v1.31.4+k3s1) на box, kube-prometheus-stack 65.1.1, релиз `sensor` в ns `sensor`.
+Стенд: k3s v1.31.4+k3s1 на box, kube-prometheus-stack 65.1.1, релиз `sensor` в ns `sensor`. k3d в `scripts/k3s-install.sh` — v5.8.3; в этом абзаце раньше стояло v5.7.5, такого пина в репозитории нет.
 Образы мониторинга импортированы через `scripts/k3d-preload-images.sh` (из подов box нет egress).
 
 Шаги:
@@ -10,7 +10,7 @@
 4. После проверки `--replicas=1`, алерт ушёл в resolved.
 
 Скриншоты: `docs/img/prometheus-alert-firing.png`, `docs/img/alertmanager-alert.png`, дашборд — `docs/img/grafana-sensor-gateway.png`.
-Receiver в демо `null`: доставка в почту или чат не настроена, проверялось получение алерта Alertmanager'ом.
+Receiver в этом снимке (01:49–01:52 MSK) — `null`: webhook ещё не был включён. Актуальная доставка — раздел «Доставка на webhook» ниже, receiver `sensor-webhook`.
 
 ## Prometheus `GET /api/v1/alerts` (отфильтровано по Sensor*)
 

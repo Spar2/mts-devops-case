@@ -30,7 +30,7 @@
 | Требование | Где лежит | Как проверить | Статус проверки |
 | --- | --- | --- | --- |
 | Запуск ≤ 3 командами | `Makefile` (`make up`) | `git clone … && cd mts-devops-case && make up` | Проверено: свежий клон e0fe907 на box без кластера, `make up` за 2 мин 0 с (smoke: вход, probe, 401 без cookie, `/metrics`); повторный `make k8s-up K3D=1` идемпотентен (1 мин 11 с). Тот же путь — в e2e GitHub Actions: k3d на pull request в `main`, k3d и нативный k3s на push в `main` и по `workflow_dispatch` |
-| IaC: кластер | `scripts/k3s-install.sh`, `infra/ansible/site.yml` | `make k8s-up` / `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` | k3d: свежий клон на box и e2e; нативный k3s (`make up K3D=0`): только e2e на `ubuntu-24.04`. Лог `docs/k8s-up-log.md`; плейбук прогонялся раньше, `failed=0` |
+| IaC: кластер | `scripts/k3s-install.sh`, `infra/ansible/site.yml` | `make k8s-up` / `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` | k3d: свежий клон на box и e2e; нативный k3s (`make up K3D=0`): только e2e на `ubuntu-24.04`. Лог `docs/k8s-up-log.md`. Полный прогон плейбука в репозитории не залогирован; в `.github/workflows/ci.yml` проверки Ansible нет |
 | IaC: ВМ | `infra/cloud-init/`, `infra/terraform/` (libvirt) | `terraform validate`, `cloud-init schema` | Валидация проходит. `terraform apply` на box не доведён (см. «Что не проверено») |
 | CI: линт, тесты, сборка | `.github/workflows/ci.yml` | вкладка Actions | Зелёный прогон на GitHub (jobs lint, api, web, helm, manifests, dockerfiles, shellcheck, images) |
 | Сканирование образов | там же, `trivy-action` v0.36.0 (сканер Trivy v0.70.0), HIGH/CRITICAL; SBOM (anchore/sbom-action) на `main` | Actions → images | Trivy нашёл реальные CVE (Starlette, OpenSSL в alpine), исправлено обновлением, прогон зелёный |
@@ -45,7 +45,7 @@
 | Сеть ВМ (netplan) | `infra/cloud-init/network-config.yaml` → `libvirt_cloudinit_disk.network_config` | `cloud-init schema` | Схема валидна; ВМ не поднималась |
 | Безопасность подов | securityContext, NetworkPolicy, PDB в чарте | `make k8s-netpol-check` | NetworkPolicy проверена в e2e на GitHub (чужой namespace → BLOCKED, web → API → REACHED) |
 | Доставка алерта | Alertmanager → webhook `alert-sink` | `make k8s-alert-demo` | Проверено: firing → webhook → resolved (e2e и box) |
-| LLM: генерация конфигов с фиксацией промтов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Проверено на box: 3 правила, 2 приняты валидатором, 1 отвергнут promtool; job `llm` в CI |
+| LLM: генерация конфигов с фиксацией промптов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Замер выбора модели: 3/3 YAML+promtool с первой попытки (`docs/llm/model-choice.md`). Отдельный прогон в `docs/llm/examples/runs.jsonl`: из трёх правил два valid, правило задержки отвергнуто promtool. Job `llm` в CI |
 | Видео ≤ 5 мин | `docs/demo-script.md` | — | Сценарий готов, ролик снимает команда |
 
 ## Состав команды (роли, опыт и навыки)
@@ -111,7 +111,7 @@ flowchart LR
 | ingress-nginx | чарт 4.11.3, https://kubernetes.github.io/ingress-nginx. Проект объявлен архивным 2026-03-24, версия зафиксирована и работает; на замену стоит смотреть Gateway API |
 | kube-prometheus-stack | чарт 65.1.1, https://prometheus-community.github.io/helm-charts (Prometheus 2.54.1, Grafana 11.2.1, Alertmanager 0.27.0) |
 | SOPS / age | 3.9.2 / 1.2.1 |
-| Ansible | ansible-core 2.17 (проверено 2.17.5) |
+| Ansible | ansible-core 2.17 (полный прогон плейбука в репозитории не залогирован; в CI проверки нет) |
 | Terraform / провайдер | проверено на 1.9.8 / dmacvicar/libvirt 0.8.3; в `versions.tf` ограничения `>= 1.6` и `~> 0.8.1`, lock-файла нет |
 | cloud-init | схема проверена cloud-init 25.1 |
 | Локальная LLM (опц.) | llama.cpp server `b11681`, модель Ternary-Bonsai-2-4B Q2_0 (Apache-2.0), promtool из `prom/prometheus:v2.54.1` |
@@ -178,7 +178,7 @@ make k8s-rollback-demo   # битый тег образа → helm --atomic от
 make k8s-rotate-demo     # ротация пароля: старый пароль и старая cookie → 401, новый → 200
 make k8s-alert-demo      # API выключается → SensorGatewayDown firing → Alertmanager → webhook alert-sink → API обратно → resolved
 make k8s-netpol-check    # NetworkPolicy: под из чужого namespace не достаёт API, web достаёт (нужен работающий контроллер политик)
-make down                # удалить кластер (и Compose-демо, если запущено)
+make down                # K3D=1: удалить кластер k3d и Compose-демо; K3D=0: снять Helm-релизы, k3s целиком не удаляет
 ```
 
 Другие режимы:
@@ -344,7 +344,7 @@ make llm-down
 ```
 
 Что проверяется в `llm-gen` (`llm/llm_gen.py`): YAML; `apiVersion/kind`; DNS-1123 имя; `release: mon` (иначе
-kube-prometheus-stack не подхватит); CamelCase имя алерта; `for`; `severity` warning|critical; summary/description;
+kube-prometheus-stack не подхватит); CamelCase имя алерта; если есть `for` — формат duration (отсутствие `for` не ошибка); `severity` warning|critical; summary/description;
 `promtool check rules` (образ `prom/prometheus:v2.54.1`); `rate()`/`increase()` по gauge и regex в `=`-матчере.
 При ошибке — один раунд: ошибки валидатора уходят модели, результат проверяется снова; если не прошёл — код выхода 1.
 В `llm-explain` — две проверки: ответ на русском (доля кириллицы ≥ 0.5, иначе один повтор с просьбой перевести;
@@ -362,7 +362,7 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; `
 Каждый запуск пишет в `llm/out/runs.jsonl`: модель, seed 42, temperature 0, файл системного промпта, полный пользовательский запрос (поле `user`; для explain — с хвостом лога), время, токены,
 результат валидации. Промпты — `llm/prompts/*.txt`.
 
-Реальный вывод `make llm-explain` (56 с, проверки пройдены):
+Реальный вывод `make llm-explain` (52.5 с, проверки пройдены):
 
 ```text
 - Что упало: проверка smoke `login` вернула HTTP 401 вместо 200 и отсутствовал сессионный токен `dts_session`.
@@ -379,6 +379,8 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; `
           labels:
             severity: critical
 ```
+
+Метрика `process_resident_memory_bytes` сервис не отдаёт (в `services/api/app/main.py` нет `prometheus_client` и process collector); пример проверяет только синтаксис PromQL.
 
 Полные примеры и журнал прогонов: `docs/llm/examples/`. Тот же прогон показал и ошибку модели: для задержки она
 написала `sum(service_probe_latency_seconds{...}[2m])` — promtool отверг, исправление тоже не прошло, `make llm-gen`
