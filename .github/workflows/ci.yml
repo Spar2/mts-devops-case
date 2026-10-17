@@ -44,7 +44,7 @@ jobs:
         working-directory: apps/web
 
   images:
-    needs: [lint, api, web, helm, manifests, dockerfiles, shellcheck]
+    needs: [lint, api, web, helm, manifests, dockerfiles, shellcheck, iac]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -134,6 +134,86 @@ jobs:
           output-file: sbom-sensor-web.spdx.json
           upload-artifact: true
 
+  iac:
+    # Terraform 1.9.8, ansible-core 2.17.14, cloud-init 26.1, Trivy config HIGH/CRITICAL.
+    # Провайдер libvirt 0.8.3 отдаёт схему без демона libvirt (проверено init/validate).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # wrapper перехватывает код возврата: fmt -check и validate тогда не роняют шаг.
+      - uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Terraform fmt, init, validate
+        run: |
+          terraform fmt -check -recursive infra/terraform
+          terraform -chdir=infra/terraform init -backend=false -input=false
+          terraform -chdir=infra/terraform validate
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ansible syntax-check
+        run: |
+          python -m pip install ansible-core==2.17.14
+          ansible-playbook --syntax-check -i infra/ansible/inventory.ini infra/ansible/site.yml
+
+      - name: cloud-init schema
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cloud-init
+          # Версия из archive ubuntu-24.04 (точный пин apt ломается при обновлении архива); печатается в лог.
+          cloud-init --version
+          # user-data.yaml.tftpl — шаблон templatefile (%{ if }, ${...}), не cloud-config.
+          # Схема проверяет пример рендера и network-config.
+          cloud-init schema -c infra/cloud-init/user-data.example.yaml
+          cloud-init schema --schema-type network-config -c infra/cloud-init/network-config.yaml
+
+      # По умолчанию Trivy рендерит чарт как Kubernetes 1.20, а kubeVersion чарта — >=1.28:
+      # без версии рендер падает и сканер не видит манифесты.
+      - name: Trivy config (Helm)
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_HELM_KUBE_VERSION: "1.31.0"
+          TRIVY_HELM_API_VERSIONS: "monitoring.coreos.com/v1,monitoring.coreos.com/v1/ServiceMonitor"
+        with:
+          scan-type: config
+          scan-ref: deploy/helm/sensor-gateway
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          version: v0.70.0
+
+      - name: Trivy config (API Dockerfile)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: services/api/Dockerfile
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          version: v0.70.0
+
+      - name: Trivy config (web Dockerfile)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: apps/web/Dockerfile
+          trivyignores: apps/web/.trivyignore
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          version: v0.70.0
+
+      - name: Trivy config (Terraform)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infra/terraform
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          version: v0.70.0
 
   helm:
     runs-on: ubuntu-24.04
