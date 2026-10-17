@@ -27,13 +27,33 @@ def _login(client: TestClient, username: str = "demo", password: str = "demo-pas
     )
 
 
-def test_health_and_ready(client: TestClient) -> None:
+def test_health_and_ready(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("APP_VERSION", raising=False)
     health = client.get("/health")
     ready = client.get("/ready")
     assert health.status_code == 200
     assert health.json() == {"status": "ok"}
     assert ready.status_code == 200
-    assert ready.json() == {"status": "ok"}
+    assert ready.json() == {"status": "ok", "version": "0.1.0"}
+    assert ready.headers["x-app-version"] == "0.1.0"
+
+
+def test_ready_reports_app_version(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_VERSION", "abc1234-canary")
+    ready = client.get("/ready")
+    assert ready.status_code == 200
+    assert ready.json() == {"status": "ok", "version": "abc1234-canary"}
+    assert ready.headers["x-app-version"] == "abc1234-canary"
+
+
+def test_ready_rejects_unsafe_app_version(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("APP_VERSION", "bad version\n")
+    ready = client.get("/ready")
+    assert ready.status_code == 200
+    assert ready.json() == {"status": "ok", "version": "0.1.0"}
+    assert ready.headers["x-app-version"] == "0.1.0"
 
 
 def test_login_bad_password(client: TestClient) -> None:
