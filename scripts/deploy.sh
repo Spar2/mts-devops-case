@@ -50,9 +50,9 @@ helm_cmd=(
   --wait
   --timeout 3m
   --set "image.api.repository=${prefix}/sensor-gateway"
-  --set "image.api.tag=${TAG}"
+  --set-string "image.api.tag=${TAG}"
   --set "image.web.repository=${prefix}/sensor-web"
-  --set "image.web.tag=${TAG}"
+  --set-string "image.web.tag=${TAG}"
 )
 if ((${#extra[@]} > 0)); then
   helm_cmd+=("${extra[@]}")

@@ -14,7 +14,7 @@ app.kubernetes.io/instance: {{ .Release.Name | quote }}
 {{- end }}
 
 {{- define "sensor-gateway.pullPolicy" -}}
-{{- $tag := index . 0 -}}
+{{- $tag := index . 0 | toString -}}
 {{- $policy := index . 1 -}}
 {{- if eq $tag "latest" -}}
 Always
