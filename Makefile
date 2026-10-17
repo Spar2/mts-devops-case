@@ -121,8 +121,8 @@ k8s-up:
 	./scripts/monitoring-install.sh
 	$(MAKE) k8s-deploy
 
-# Образы собираются локально и импортируются в containerd k3s: не нужен доступ к приватному GHCR.
-# Чтобы брать образы из GHCR (их пушит CI), выполнить: make k8s-deploy TAG=<sha> после docker login/pull secret.
+# Образы собираются локально и импортируются в containerd k3s: pull из GHCR не нужен.
+# Опциональный путь из GHCR — цель ghcr-secret ниже (если пакеты недоступны анонимно).
 k8s-images:
 	docker build -t $(PREFIX)/sensor-gateway:$(TAG) services/api
 	docker build -t $(PREFIX)/sensor-web:$(TAG) apps/web
@@ -132,7 +132,8 @@ else
 	$(IMPORT_CMD)
 endif
 
-# Опционально: брать образы, которые пушит CI, из приватного GHCR.
+# Опционально: образы, которые пушит CI, из GHCR.
+# Если пакеты недоступны анонимно:
 # GHCR_USER=<login> GHCR_TOKEN=<PAT с read:packages> make ghcr-secret
 # затем make k8s-deploy-ghcr TAG=<короткий sha коммита из main>.
 ghcr-secret:
