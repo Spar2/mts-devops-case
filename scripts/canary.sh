@@ -194,18 +194,22 @@ install_canary() {
 }
 
 # ingress-nginx применяет новый canary-Ingress с задержкой; до этого X-Canary: always
-# уходит в stable. Ждём (до 90 с), пока у контроллера появится backend canary с endpoint.
+# уходит в stable. Ждём (до 90 с), пока у контроллера появится backend canary с endpoint
+# и пока stable backend не сошлётся на него в alternativeBackends: без этой ссылки
+# балансировщик ещё не делит трафик и smoke попадает в stable.
 wait_ingress_backend() {
-  local i be=sensor-sensor-canary-web-http
+  local i be=sensor-sensor-canary-web-http stable_be=sensor-sensor-web-http
   for ((i = 0; i < 45; i++)); do
     if kubectl -n ingress-nginx exec deploy/ingress-nginx-controller -- /dbg backends get "$be" 2>/dev/null \
-        | grep -q '"address"'; then
-      step "ingress-nginx backend ${be} has endpoints"
+        | grep -q '"address"' \
+      && kubectl -n ingress-nginx exec deploy/ingress-nginx-controller -- /dbg backends get "$stable_be" 2>/dev/null \
+        | tr -d ' \n' | grep -q "\"alternativeBackends\":\[[^]]*\"${be}\""; then
+      step "ingress-nginx backend ${be} has endpoints and is linked from ${stable_be}"
       return 0
     fi
     sleep 2
   done
-  step "ingress-nginx backend ${be} has no endpoints after 90s"
+  step "ingress-nginx backend ${be} is not ready or not linked from ${stable_be} after 90s"
   return 1
 }
 
