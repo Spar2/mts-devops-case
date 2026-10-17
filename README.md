@@ -31,7 +31,7 @@
 | --- | --- | --- | --- |
 | Запуск ≤ 3 командами | `Makefile` (`make up`) | `git clone … && cd mts-devops-case && make up` | Проверено: свежий клон e0fe907 на box без кластера, `make up` за 2 мин 0 с (smoke: вход, probe, 401 без cookie, `/metrics`); повторный `make k8s-up K3D=1` идемпотентен (1 мин 11 с). Тот же путь — в e2e GitHub Actions: k3d на pull request в `main`, k3d и нативный k3s на push в `main` и по `workflow_dispatch` |
 | IaC: кластер | `scripts/k3s-install.sh`, `infra/ansible/site.yml` | `make k8s-up` / `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` | k3d: свежий клон на box и e2e; нативный k3s (`make up K3D=0`): только e2e на `ubuntu-24.04`. Лог `docs/k8s-up-log.md`; плейбук прогонялся раньше, `failed=0`. syntax-check — job `iac` (ansible-core 2.17.14) |
-| IaC: ВМ | `infra/cloud-init/`, `infra/terraform/` (libvirt, lock 0.8.3) | job `iac`: `terraform fmt -check`, `init -backend=false`, `validate`; `cloud-init schema` | Локально: Terraform 1.9.8, cloud-init 26.1, схемы `Valid`. `terraform apply` на box не доведён (см. «Что не проверено») |
+| IaC: ВМ | `infra/cloud-init/`, `infra/terraform/` (libvirt, lock 0.8.3) | job `iac`: `terraform fmt -check`, `init -backend=false`, `validate`, `cloud-init schema`; живой `terraform apply` (`vm_memory_mib`, `vm_vcpu`, `run_make_up`) и `terraform destroy` | Job `iac` зелёный на GitHub (pull request #3) и локально (Terraform 1.9.8, cloud-init 26.1, схемы `Valid`). Живой apply на box 2026-10-17: 2048 МиБ / 2 vCPU, `run_make_up=false`, cloud-init `status: done`, клон и пакеты, `vm_ip` совпал с DHCP. `make up` в госте не запускался. Лог `docs/iac-apply-log.md` |
 | CI: линт, тесты, сборка | `.github/workflows/ci.yml` | вкладка Actions | Зелёный прогон на GitHub (jobs lint, api, web, helm, manifests, dockerfiles, shellcheck, llm, iac, images). Job `iac` зелёный на GitHub (pull request #3) и воспроизведён локально |
 | Сканирование образов | job `images` и job `iac` (config: чарт, Dockerfile, Terraform), `trivy-action` v0.36.0 (Trivy v0.70.0), HIGH/CRITICAL; SBOM (anchore/sbom-action) на `main` | Actions → images и iac | Образы: CVE (Starlette, OpenSSL в alpine) исправлены, прогон зелёный. Config: локально Trivy 0.70.0, чарт и Terraform без HIGH/CRITICAL; DS-0002 nginx-образа — `apps/web/.trivyignore` |
 | Публикация в registry | там же, push в `ghcr.io/spar2/mts-devops-case/*` только из `main` | Actions → images → Push images | Шаг выполняется в зелёном прогоне |
@@ -42,7 +42,7 @@
 | Секреты вне git | SOPS 3.9.2 + age 1.2.1, `scripts/secrets-*.sh`, `deploy/secrets/README.md` | `scripts/secrets-rotate-check.sh` | Лог 2026-10-17: старый пароль и cookie → 401, новый → 200 (`docs/secrets-rotation-log.md`). Без паузы перед SIGTERM на 1 реплике скрипт ловил 502; с `preStop` и ожиданием ухода старых подов в `secrets-rotate.sh` — 3 прогона подряд PASS на box 2026-10-17 |
 | Мониторинг: дашборд | `deploy/monitoring/` (kube-prometheus-stack 65.1.1) | Grafana → дашборд `sensor-gateway` | Проверено в k3d, скриншот `docs/img/grafana-sensor-gateway.png` |
 | Мониторинг: алерт | `deploy/monitoring/prometheusrule.yaml` | `kubectl -n sensor scale deploy sensor-api --replicas=0` | Проверено: `SensorGatewayDown` firing в Prometheus и в Alertmanager (`docs/monitoring-alert-proof.md`, скриншоты) |
-| Сеть ВМ (netplan) | `infra/cloud-init/network-config.yaml` → `libvirt_cloudinit_disk.network_config` | `cloud-init schema` (job `iac`) | Схема валидна (cloud-init 26.1); ВМ не поднималась |
+| Сеть ВМ (netplan) | `infra/cloud-init/network-config.yaml` → `libvirt_cloudinit_disk.network_config` | `cloud-init schema` (job `iac`); в госте `sudo netplan get`, `ip addr` | Схема валидна (cloud-init 26.1, job `iac`). На ВМ 2026-10-17: DHCP, `match: en*`, `ens3` получил `192.168.122.188/24`; адрес совпал с `terraform output vm_ip` и арендой libvirt |
 | Безопасность подов | securityContext, NetworkPolicy, PDB в чарте | `make k8s-netpol-check` | NetworkPolicy проверена в e2e на GitHub (чужой namespace → BLOCKED, web → API → REACHED) |
 | Доставка алерта | Alertmanager → webhook `alert-sink` | `make k8s-alert-demo` | Проверено: firing → webhook → resolved (e2e и box) |
 | LLM: генерация конфигов с фиксацией промтов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Проверено на box: 3 правила, 2 приняты валидатором, 1 отвергнут promtool; job `llm` в CI |
@@ -112,8 +112,8 @@ flowchart LR
 | kube-prometheus-stack | чарт 65.1.1, https://prometheus-community.github.io/helm-charts (Prometheus 2.54.1, Grafana 11.2.1, Alertmanager 0.27.0) |
 | SOPS / age | 3.9.2 / 1.2.1 |
 | Ansible | ansible-core 2.17.14 (syntax-check в CI; полный прогон плейбука раньше на 2.17.5, `failed=0`) |
-| Terraform / провайдер | 1.9.8 / dmacvicar/libvirt 0.8.3. Lock-файл `infra/terraform/.terraform.lock.hcl` (в `versions.tf`: `>= 1.6`, `~> 0.8.1`) |
-| cloud-init | 26.1 (в CI — пакет из архива ubuntu-24.04, версия печатается в лог) (схема примера рендера и network-config; раньше также 25.1). `user-data.yaml.tftpl` — шаблон Terraform, в схему не подаётся |
+| Terraform / провайдер | 1.9.8 / dmacvicar/libvirt 0.8.3. Lock-файл `infra/terraform/.terraform.lock.hcl` (в `versions.tf`: `>= 1.6`, `~> 0.8.1`). На box при живом apply ещё libvirt 11.3.0 и QEMU 10.0.13 |
+| cloud-init | 26.1 в CI (пакет ubuntu-24.04, версия в логе job `iac`) и в госте Ubuntu 24.04.5 (`status: done`); схема примера и network-config также на 25.1.4. `user-data.yaml.tftpl` — шаблон Terraform, в схему не подаётся |
 | Локальная LLM (опц.) | llama.cpp server `b11681`, модель Ternary-Bonsai-2-4B Q2_0 (Apache-2.0), promtool из `prom/prometheus:v2.54.1` |
 | GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0` (Trivy v0.70.0, образы и config), `hashicorp/setup-terraform@v4.0.1` (Terraform 1.9.8), ansible-core 2.17.14, cloud-init (пакет ubuntu-24.04), `anchore/sbom-action@v0.17.8`, kubeconform 0.6.7, hadolint 2.12.0 (`hadolint/hadolint-action@v3.1.0`, порог error), shellcheck 0.10.0 |
 | Приёмник алертов | `mendhak/http-https-echo:34` |
@@ -127,7 +127,7 @@ flowchart LR
 | `make demo` (Compose) | до 2 ГБ | 1–2 vCPU | ~1 ГБ образов |
 | `make up` (k3s + мониторинг) | 8 ГБ достаточно (весь стек около 3 ГБ), 16 ГБ с запасом | 2–4 vCPU | ~10 ГБ |
 | `make llm-up` (опц.) | пик RSS 1.66 ГБ (2B-вариант ~0.7 ГБ) | 4–6 vCPU с AVX2 | 1.2 ГБ весов + 0.1 ГБ образ |
-| ВМ из `infra/terraform` | 8 ГиБ по умолчанию (`vm_memory_mib`) | 4 vCPU | 30 ГиБ |
+| ВМ из `infra/terraform` | 8 ГиБ по умолчанию (`vm_memory_mib=8192`); живой прогон — 2048 МиБ | 4 vCPU по умолчанию; живой прогон — 2 | 30 ГиБ |
 
 Лимиты: API — requests 50m/128Mi, limits 500m/256Mi; web — 25m/64Mi и 200m/128Mi (`values.yaml`). У компонентов kube-prometheus-stack
 лимиты заданы в `values-kube-prometheus-stack.yaml`. У alert-sink — 10m/32Mi и 100m/64Mi (`alert-sink.yaml`). У ingress-nginx ресурсы не задаются (значения чарта по умолчанию, без limits).
@@ -187,7 +187,7 @@ make down                # удалить кластер (и Compose-демо, �
 - `make up K3D=0` — нативный k3s на хосте (ВМ, OpenStack-инстанс), ingress на `:80`. Проверено в GitHub Actions на Ubuntu 24.04.
 - `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` — плейбук-обёртка над `make k8s-up`
   (локальный, `connection: local`; логика не дублируется).
-- ВМ: `infra/README.md` — Terraform (libvirt) + cloud-init + netplan, внутри ВМ выполняется `make up K3D=0`.
+- ВМ: `infra/README.md` — Terraform (libvirt) + cloud-init + netplan. По умолчанию внутри ВМ выполняется `make up K3D=0` (`run_make_up=true`). Живой прогон на box — с `run_make_up=false`, лог `docs/iac-apply-log.md`.
 - Образы из GHCR (их пушит CI из `main`): пакеты приватные, как и репозиторий. `GHCR_USER=… GHCR_TOKEN=<PAT read:packages> make ghcr-secret`
   создаёт pull-secret `ghcr`, затем `make k8s-deploy-ghcr TAG=<sha>`. Создание секрета и шаблон чарта проверены, вытягивание из
   приватного GHCR в кластере — нет. Путь по умолчанию (локальная сборка) от GHCR не зависит.
@@ -243,10 +243,7 @@ make test
   `K3D_PRELOAD=1` (из подов нет egress), `INGRESS_SERVICE_TYPE=NodePort` (не работает hostPort) и host-gw вместо vxlan —
   на обычной Ubuntu они не нужны. В песочнице нет и ipset, поэтому контроллер NetworkPolicy k3s там не стартует
   и `make k8s-netpol-check` честно падает; на GitHub-раннере (обычный kernel) проверка проходит.
-- **`terraform apply`** на box не доведён: вложенная ВМ на 6 ГБ исчерпала память песочницы. Локально проходят команды job `iac`:
-  `terraform fmt -check`, `init -backend=false`, `validate` (1.9.8, провайдер 0.8.3 из lock-файла, без демона libvirt)
-  и `cloud-init schema` для `user-data.example.yaml` и `network-config.yaml` (cloud-init 26.1). `user-data.yaml.tftpl`
-  схема не принимает: директивы `templatefile` ломают YAML. На GitHub job `iac` ещё не запускался. Внутри ВМ выполняется `make up K3D=0`, проверенный в e2e.
+- **ВМ libvirt.** Job `iac` (Terraform 1.9.8, провайдер 0.8.3 из lock-файла, `fmt -check`, `init -backend=false`, `validate`, `cloud-init schema` для примера и network-config; cloud-init 26.1) зелёный на GitHub (pull request #3) и локально. `user-data.yaml.tftpl` схема не принимает: это шаблон `templatefile`. Живой `terraform apply` на box 2026-10-17 доведён при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false` (лог `docs/iac-apply-log.md`): загрузка, cloud-init `status: done`, netplan, клон. Не запускались значения по умолчанию (8 ГиБ / 4 vCPU) и `make up K3D=0` внутри этой ВМ; нативный `make up K3D=0` по-прежнему только e2e. До успешного прогона экземпляр box пересоздали (оператор связывает это с нехваткой памяти). Повторный apply после возврата k3d не делался.
 - Доставка алертов: webhook в кластерный `alert-sink` (пишет тело в лог). Почта и мессенджеры не настраивались.
 - Видео: не записано в репозитории, его снимает команда (требования выше).
 - `rollout status` возвращается, когда новые поды Ready, а старые ещё ~5 с отвечают в `preStop` со старым секретом. Поэтому `secrets-rotate.sh` и `secrets-apply.sh` после него ждут, пока старые поды API исчезнут: только после этого старый пароль гарантированно даёт 401.
