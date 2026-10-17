@@ -215,7 +215,7 @@ data:
                 "uid": "prometheus"
               },
               "expr": "sum by (service) (rate(http_requests_total{namespace=\"sensor\"}[2m]))",
-              "legendFormat": "{{pod}}"
+              "legendFormat": "{{service}}"
             }
           ]
         },
@@ -223,7 +223,7 @@ data:
           "id": 4,
           "type": "timeseries",
           "title": "Задержка probe службы",
-          "description": "Latency of the latest POST /api/v1/service/probe. Alert threshold is 0.5s.",
+          "description": "Latency of the latest POST /api/v1/service/probe. No alert threshold.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -283,7 +283,7 @@ data:
           "id": 5,
           "type": "timeseries",
           "title": "Доля 5xx через ingress-nginx",
-          "description": "Requests per second. The counter includes the /metrics scrape itself.",
+          "description": "Share of 5xx among ingress-nginx requests in namespace sensor. Unit percentunit, axis 0..1.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
