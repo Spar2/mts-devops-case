@@ -8,9 +8,9 @@
 
 Что есть на самом деле:
 
-- **CI (GitHub Actions, `ci.yml`).** На каждый push и pull request: линт, тесты, проверки манифестов, IaC (Terraform, Ansible, cloud-init, Trivy config), сборка, Trivy образов. Локально: `make lint` и `make test` — jobs `lint`, `api`, `web`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff` из job `llm`. Не входят job `images` и job `iac` (раздел «CI локально»). Только на `main`: SBOM и push образов в приватный GHCR.
+- **CI (GitHub Actions, `ci.yml`).** На каждый push и pull request: линт, тесты, проверки манифестов, IaC (Terraform, Ansible, cloud-init, Trivy config), сборка, Trivy образов. На уровне workflow `permissions: contents: read`. Job `images` (pull request и push не в `main`) собирает и сканирует, без push и без `packages: write`. Job `images-publish` (только push в `main`) поднимает `packages: write`, пушит образы в приватный GHCR и кладёт SBOM. Concurrency `ci-${{ github.ref }}`: push в одну ветку ждёт в очереди без отмены, чтобы прогоны не перетирали `:latest` не по порядку; pull request отменяет предыдущий прогон. Все `uses:` закреплены по SHA коммита. Локально: `make lint` и `make test` — jobs `lint`, `api`, `web`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff` из job `llm`. Не входят job `images`, `images-publish` и job `iac` (раздел «CI локально»).
 - **CD.** Выкладка в кластер идёт командами `make up`, `make k8s-deploy` и `make k8s-canary`: Helm `--atomic`, smoke, canary через ingress-nginx с PromQL-гейтом и автооткатом. По умолчанию образы собираются локально из того же коммита.
-- **e2e в Actions (`e2e.yml`).** На pull request в `main` (кроме правок только `*.md`/`docs/`) прогоняется только k3d. На push в `main` с тем же фильтром и вручную через `workflow_dispatch` — оба варианта, k3d и нативный k3s. Устаревший прогон того же PR отменяется; прогон `main` не прерывается. Секретов workflow не использует, образы собираются на раннере.
+- **e2e в Actions (`e2e.yml`).** На pull request в `main` (кроме правок только `*.md`/`docs/`) прогоняется только k3d. На push в `main` с тем же фильтром и вручную через `workflow_dispatch` — оба варианта, k3d и нативный k3s. Устаревший прогон того же PR отменяется; прогон `main` не прерывается (группа `e2e-${{ github.ref }}`). Секретов workflow нет, `permissions: contents: read`, образы собираются на раннере. `make status` при `CI=true` пароли не печатает. Шаг после `make up` и шаг после ротации читают Secret и регистрируют `::add-mask::`.
 - **Без CD-деплоя из Actions.** Отдельного деплоя в постоянный кластер из Actions нет: у проекта нет постоянного кластера, доступного GitHub.
 
 ## Описание проблемы
@@ -32,9 +32,9 @@
 | Запуск ≤ 3 командами | `Makefile` (`make up`) | `git clone … && cd mts-devops-case && make up` | Проверено: свежий клон e0fe907 на box без кластера, `make up` за 2 мин 0 с (smoke: вход, probe, 401 без cookie, `/metrics`); повторный `make k8s-up K3D=1` идемпотентен (1 мин 11 с). Тот же путь — в e2e GitHub Actions: k3d на pull request в `main`, k3d и нативный k3s на push в `main` и по `workflow_dispatch` |
 | IaC: кластер | `scripts/k3s-install.sh`, `infra/ansible/site.yml` | `make k8s-up` / `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` | k3d: свежий клон на box и e2e; нативный k3s (`make up K3D=0`): только e2e на `ubuntu-24.04`. Лог `docs/k8s-up-log.md`. Полный прогон плейбука в репозитории не залогирован; syntax-check — job `iac` (ansible-core 2.17.14) |
 | IaC: ВМ | `infra/cloud-init/`, `infra/terraform/` (libvirt, lock 0.8.3) | job `iac`: `terraform fmt -check`, `init -backend=false`, `validate`, `cloud-init schema`; живой `terraform apply` (`vm_memory_mib`, `vm_vcpu`, `run_make_up`) и `terraform destroy` | Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально на той схеме (Terraform 1.9.8, cloud-init 26.1, схемы `Valid`). Живой apply на box 2026-10-17 шёл с `github_token` (переменной больше нет): 2048 МиБ / 2 vCPU, `run_make_up=false`, cloud-init `status: done`, клон и пакеты, `vm_ip` совпал с DHCP. `make up` в госте не запускался. Лог `docs/iac-apply-log.md`. Новая схема (HTTPS без токена или `github_deploy_key_path`) на ВМ не применялась |
-| CI: линт, тесты, сборка | `.github/workflows/ci.yml` | вкладка Actions | Зелёный прогон на GitHub (jobs lint, api, web, helm, manifests, dockerfiles, shellcheck, llm, iac, images). Job `iac` зелёный на GitHub (pull request #3) и воспроизведён локально |
-| Сканирование образов | job `images` и job `iac` (config: чарт, Dockerfile, Terraform), `trivy-action` v0.36.0 (Trivy v0.70.0), HIGH/CRITICAL; SBOM (anchore/sbom-action) на `main` | Actions → images и iac | Образы: CVE (Starlette, OpenSSL в alpine) исправлены, прогон зелёный. Config: локально Trivy 0.70.0, чарт и Terraform без HIGH/CRITICAL; DS-0002 nginx-образа — `apps/web/.trivyignore` |
-| Публикация в registry | там же, push в `ghcr.io/spar2/mts-devops-case/*` только из `main` | Actions → images → Push images | Шаг выполняется в зелёном прогоне |
+| CI: линт, тесты, сборка | `.github/workflows/ci.yml` | вкладка Actions | Зелёный прогон на GitHub (jobs lint, api, web, helm, manifests, dockerfiles, shellcheck, llm, iac, images) до выноса push в `images-publish`. Это разделение, pin `uses:` по SHA и concurrency `ci-<ref>` на GitHub не перепроверялись. Job `iac` зелёный на GitHub (pull request #3) и воспроизведён локально |
+| Сканирование образов | job `images` (не `main`) и job `images-publish` (push в `main`); job `iac` (config: чарт, Dockerfile, Terraform). `trivy-action` v0.36.0 по SHA `ed142fd0673e97e23eac54620cfb913e5ce36c25` (Trivy v0.70.0), HIGH/CRITICAL; SBOM (anchore/sbom-action) в `images-publish` | Actions → images или images-publish, и iac | Образы: CVE (Starlette, OpenSSL в alpine) исправлены, прогон зелёный (тогда шаг был в job `images`). Config: локально Trivy 0.70.0, чарт и Terraform без HIGH/CRITICAL; DS-0002 nginx-образа — `apps/web/.trivyignore` |
+| Публикация в registry | job `images-publish`: push в `ghcr.io/spar2/mts-devops-case/*` только из `main`, право `packages: write` только у этого job. На pull request job `images` без push | Actions → images-publish → Push images | Push был в зелёном прогоне job `images`. Job `images-publish` на GitHub не перепроверялся |
 | Проверка манифестов | `scripts/lint-manifests.sh` (kubeconform 0.6.7: stable, canary, два манифеста мониторинга), hadolint 2.12.0, shellcheck 0.10.0 | `make lint` | Проверено локально: `make lint` код 0. Сломанный YAML и скрипт с ошибкой shellcheck дают ненулевой код (правки откачены). Job `manifests` вызывает тот же скрипт |
 | CD: Helm + откат | `deploy/helm/sensor-gateway` (RollingUpdate `maxUnavailable: 0`, `preStop`), `scripts/deploy.sh` (`--atomic` + smoke + `helm rollback` / `uninstall`) | `make k8s-rollback-demo`; без кластера — `scripts/test-deploy-rollback.sh` в `make lint` | Проверено на кластере: битый тег → откат `--atomic`; провал smoke → `helm rollback` (лог `docs/cd-demo-log.md`). С `preStop` полный прогон с нуля на box 2026-10-17: `make up`, canary, canary-fail, rollback-demo, alert-demo — PASS. Ветка «нет ревизий / одна ревизия / ошибка самого rollback» на кластере этим прогоном не покрыта: её гоняет `test-deploy-rollback.sh` (заглушки helm/kubectl) |
 | CD: canary через ingress | `scripts/canary.sh` (вес 10→50→100, smoke + PromQL: `up`, трафик и доля 5xx canary по метрикам ingress-nginx) | `make k8s-canary` | Проверено: успешный canary с promote и провальный canary с автооткатом, stable не задет (`docs/cd-demo-log.md`) |
@@ -115,7 +115,7 @@ flowchart LR
 | Terraform / провайдер | 1.9.8 / dmacvicar/libvirt 0.8.3. Lock-файл `infra/terraform/.terraform.lock.hcl` (в `versions.tf`: `>= 1.6`, `~> 0.8.1`). На box при живом apply ещё libvirt 11.3.0 и QEMU 10.0.13 |
 | cloud-init | На run 39006928822: 26.1-0ubuntu1~24.04.1 (пакет ubuntu-24.04 без пина, версия печатается в лог). Схема: `user-data.example.yaml` и `network-config.yaml`; `user-data.yaml.tftpl` не подаётся. В госте Ubuntu 24.04.5 — `26.1-0ubuntu1~24.04.1`, `status: done`. Схема на хосте прогона — 25.1.4. |
 | Локальная LLM (опц.) | llama.cpp server `b11681`, модель Ternary-Bonsai-2-4B Q2_0 (Apache-2.0), promtool из `prom/prometheus:v2.54.1` |
-| GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0` (Trivy v0.70.0, образы и config), `hashicorp/setup-terraform@v4.0.1` (Terraform 1.9.8), ansible-core 2.17.14, cloud-init (пакет ubuntu-24.04), `anchore/sbom-action@v0.17.8`, kubeconform 0.6.7, hadolint 2.12.0 (`hadolint/hadolint-action@v3.1.0`, порог error), shellcheck 0.10.0 |
+| GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, ansible-core 2.17.14, cloud-init (пакет ubuntu-24.04), kubeconform 0.6.7, shellcheck 0.10.0, Trivy v0.70.0. `uses:` по SHA коммита (в скобках тег, с которого снят SHA): checkout `11d5960a326750d5838078e36cf38b85af677262` (v4.4.0), setup-python `a26af69be951a213d495a4c3e4e4022e16d87065` (v5.6.0), setup-node `49933ea5288caeca8642d1e84afbd3f7d6820020` (v4.4.0), setup-buildx-action `8d2750c68a42422c14e847fe6c8ac0403b4cbd6f` (v3.12.0), build-push-action `10e90e3645eae34f1e60eeb005ba3a3d33f178e8` (v6.19.2), login-action `c94ce9fb468520275223c153574b00df6fe4bcc9` (v3.7.0), trivy-action `ed142fd0673e97e23eac54620cfb913e5ce36c25` (v0.36.0, annotated, SHA коммита), setup-terraform `dfe3c3f87815947d99a8997f908cb6525fc44e9e` (v4.0.1, Terraform 1.9.8), setup-helm `1a275c3b69536ee54be43f2070a358922e12c8d4` (v4.3.1), sbom-action `55dc4ee22412511ee8c3142cbea40418e6cec693` (v0.17.8), hadolint-action `54c9adbab1582c2ef04b2016b760714a4bfde3cf` (v3.1.0, hadolint 2.12.0, порог error) |
 | Приёмник алертов | `mendhak/http-https-echo:34` |
 
 Только открытые чарты из публичных репозиториев. Чарты и бинарники конвейера запинены. cloud-init в CI — пакет архива ubuntu-24.04 без пина.
@@ -163,12 +163,12 @@ make up
 3. сборка образов из исходников и `k3d image import` (до мониторинга — ниже пик RAM) — **доступ к приватному GHCR не нужен**;
 4. `scripts/monitoring-install.sh` — kube-prometheus-stack 65.1.1, дашборд, правила алертов, приёмник алертов `alert-sink`;
 5. `scripts/deploy.sh` — Helm-релиз `sensor` (`--atomic`) и smoke-проверка; при провале — `helm rollback`, а если ревизия одна или её нет — `helm uninstall`. Ошибка history не обрывает скрипт до этой команды; ошибка самого rollback/uninstall даёт код 1 и строку `error:`;
-6. `make status` — печатает адреса и пароль входа.
+6. `make status` — печатает адреса. Пароль в вывод не входит: рядом команда `kubectl`, само значение — только `SHOW_SECRETS=1 make status`. При `CI=true` значение не печатается и эта переменная его не включает.
 
 Результат:
 
-- приложение: http://sensor.localtest.me:8081 — логин `demo`, пароль печатает `make status`;
-- Grafana: http://grafana.localtest.me:8081 — логин `admin`, случайный пароль из SOPS-секрета `grafana-admin` печатает `make status`; дашборд `sensor-gateway`.
+- приложение: http://sensor.localtest.me:8081 — логин `demo`; пароль: `SHOW_SECRETS=1 make status` (без флага в выводе команда `kubectl -n sensor get secret sensor-secrets … | base64 -d`);
+- Grafana: http://grafana.localtest.me:8081 — логин `admin`, случайный пароль из SOPS-секрета `grafana-admin` так же (`SHOW_SECRETS=1` или `kubectl` из вывода `make status`); дашборд `sensor-gateway`.
 
 `*.localtest.me` публично резолвится в 127.0.0.1; если DNS этого не делает, скрипт сам дописывает `/etc/hosts`.
 
@@ -197,7 +197,7 @@ make down                # demo-down, если есть .env; K3D=1: ещё k3d 
 
 ### CI локально
 
-`make lint` и `make test` повторяют jobs `lint`, `api`, `web`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff check llm`. Не входят job `images` (сборка, Trivy образов, SBOM), job `iac` и pytest/promtool job `llm` (`make llm-test`).
+`make lint` и `make test` повторяют jobs `lint`, `api`, `web`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff check llm`. Не входят job `images` и `images-publish` (сборка, Trivy образов, push, SBOM), job `iac` и pytest/promtool job `llm` (`make llm-test`).
 
 ```bash
 make lint
@@ -209,7 +209,7 @@ make test
 - ruff 0.8.4: `ruff check services/api` и `ruff check llm`. Бинарь этой версии из PATH, иначе образ `ghcr.io/astral-sh/ruff:0.8.4`;
 - Helm v3.16.3: `helm lint` и `helm template` чарта (`deploy/helm/sensor-gateway`, namespace `sensor`);
 - kubeconform 0.6.7: `scripts/lint-manifests.sh` (его же вызывает job `manifests`) — stable, canary (`track=canary`, вес 10, api-versions `monitoring.coreos.com/v1` и `monitoring.coreos.com/v1/ServiceMonitor`) и файлы `deploy/monitoring/dashboard-configmap.yaml`, `prometheusrule.yaml`. Флаги: `-strict -summary -kubernetes-version 1.31.0`, схемы default и CRDs-catalog;
-- hadolint 2.12.0 с `--failure-threshold error` для `services/api/Dockerfile` и `apps/web/Dockerfile` (в CI это `hadolint/hadolint-action@v3.1.0`);
+- hadolint 2.12.0 с `--failure-threshold error` для `services/api/Dockerfile` и `apps/web/Dockerfile` (в CI это `hadolint/hadolint-action` `54c9adbab1582c2ef04b2016b760714a4bfde3cf`, тег v3.1.0);
 - shellcheck 0.10.0 для `scripts/*.sh`;
 - `scripts/test-deploy-rollback.sh`: `deploy.sh` после проваленного smoke. Заглушки `helm` и `kubectl` в PATH, HTTP 500 на localhost, кластер не поднимается. Проверяются пустая история, одна ревизия, битый JSON, объект вместо списка, ненулевой код `helm history`, откат при двух ревизиях и ненулевой код с текстом `error: helm rollback` / `error: helm uninstall`, если сама команда отката падает.
 
@@ -288,7 +288,8 @@ make test
   Logout стирает cookie в браузере; сама подпись действительна до истечения или ротации — это осознанный компромисс stateless-сессий.
 - Вход: не больше 30 попыток в минуту на ключ «адрес соединения» (429). Счётчик в памяти процесса API, ключ — адрес
   ближайшего пира, то есть nginx web, а не конечного клиента: это грубый лимит на под, а не на пользователя.
-- CI: Trivy блокирует образ с исправимыми HIGH/CRITICAL; push в GHCR только из `main`; `GITHUB_TOKEN` с `contents: read`, `packages: write`.
+- CI: Trivy блокирует образ с исправимыми HIGH/CRITICAL. На уровне workflow `permissions: contents: read`. `packages: write` только у job `images-publish` (push в GHCR и SBOM, только push в `main`). На pull request этот job не запускается: job `images` собирает и сканирует без push. Concurrency `ci-${{ github.ref }}`: push в одну ветку — очередь без отмены, чтобы параллельные прогоны не перетирали `:latest`; pull request — `cancel-in-progress`. Все `uses:` — полный SHA коммита и комментарий тега.
+- e2e: `permissions: contents: read`, секретов workflow нет. `make up` вызывает `make status`; при `CI=true` пароли demo и Grafana в лог не попадают. Шаги «Mask stand passwords» после `make up` и после ротации читают ключи Secret и печатают `::add-mask::` (раннер прячет дальнейшие вхождения). Локально значение пароля печатает только `SHOW_SECRETS=1 make status`.
 - CI, job `iac`: тот же Trivy v0.70.0 (`scan-type: config`, HIGH/CRITICAL) по чарту (рендер Kubernetes 1.31 и ServiceMonitor),
   обоим Dockerfile и `infra/terraform`. Чарт и Terraform без находок этого уровня. `apps/web/Dockerfile` — DS-0002 (нет `USER`):
   исключение в `apps/web/.trivyignore`, мастер nginx должен занять порт 80. Образный скан CVE это исключение не затрагивает.
@@ -302,7 +303,7 @@ make test
 - NetworkPolicy: к API (порт 8000) пускают только web своего релиза и поды Prometheus (`app.kubernetes.io/name: prometheus` в namespace monitoring), к web (порт 80) — только
   namespace ingress-nginx. Проверка — `make k8s-netpol-check` в e2e: из чужого namespace API и web недоступны, web через ingress-nginx отвечает 200, web своего релиза достаёт API. PDB `maxUnavailable: 1` для api и web.
 - kubeconfig нативного k3s: `/etc/rancher/k3s/k3s.yaml` с правами 600, копия пользователю в `~/.kube/config` (600).
-- Supply chain: Trivy до push; SBOM (SPDX JSON, `anchore/sbom-action`) обоих образов — артефакт прогона CI на `main`. Подпись cosign keyless
+- Supply chain: Trivy до push; SBOM (SPDX JSON, `anchore/sbom-action`, SHA в таблице инструментов) обоих образов — артефакт job `images-publish` на `main`. Подпись cosign keyless
   сознательно не используется: запись в публичный Rekor раскрыла бы имя приватного репозитория.
 - Cloud-init не получает GitHub-токен. По умолчанию ВМ клонирует репозиторий по HTTPS без учётных данных.
   Для приватного репозитория — `github_deploy_key_path` (абсолютный путь к приватному ключу на хосте Terraform) и SSH `repo_url`.
@@ -385,6 +386,7 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; �
 
 ## Troubleshooting
 
+- `make status` не показывает пароль — так и задумано. В выводе команда `kubectl … | base64 -d`. Напечатать значение: `SHOW_SECRETS=1 make status`. В GitHub Actions (`CI=true`) значение в лог не попадает, даже если задать `SHOW_SECRETS=1`.
 - `make: command not found` — выполнить строку подготовки Ubuntu из «Как запустить».
 - `make lint` не тянет образ или схему kubeconform — нужен Docker в PATH и исходящий HTTPS. Helm v3.16.3 и kubeconform 0.6.7 при отсутствии нужной версии ставятся в `~/.local/bin` без sudo.
 - Порт 8081 (k3d) или 8080 (`make demo`) занят — остановить другой процесс.

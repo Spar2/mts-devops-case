@@ -153,12 +153,32 @@ k8s-canary:
 k8s-rollback-demo:
 	./scripts/rollback-demo.sh
 
+# Пароль в лог не пишется. Команда чтения — всегда; само значение только при
+# SHOW_SECRETS=1 и не в CI (GitHub Actions задаёт CI=true, make up вызывает status).
 status:
 	@echo
-	@echo "Приложение: http://sensor.localtest.me:$(INGRESS_PORT)  логин demo, пароль:"
-	@kubectl -n sensor get secret sensor-secrets -o jsonpath='{.data.DEMO_PASSWORD}' | base64 -d; echo
-	@echo "Grafana:    http://grafana.localtest.me:$(INGRESS_PORT)  логин admin, пароль (дашборд sensor-gateway):"
-	@kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo
+	@echo "Приложение: http://sensor.localtest.me:$(INGRESS_PORT)  логин demo"
+	@if [ "$${CI:-}" = "true" ]; then \
+	  echo "Пароль в лог не печатается (CI=true)."; \
+	  echo "  kubectl -n sensor get secret sensor-secrets -o jsonpath='{.data.DEMO_PASSWORD}' | base64 -d; echo"; \
+	elif [ "$${SHOW_SECRETS:-}" = "1" ]; then \
+	  printf '%s' "Пароль: "; \
+	  kubectl -n sensor get secret sensor-secrets -o jsonpath='{.data.DEMO_PASSWORD}' | base64 -d; echo; \
+	else \
+	  echo "Пароль не печатается. Напечатать значение: SHOW_SECRETS=1 make status"; \
+	  echo "  kubectl -n sensor get secret sensor-secrets -o jsonpath='{.data.DEMO_PASSWORD}' | base64 -d; echo"; \
+	fi
+	@echo "Grafana:    http://grafana.localtest.me:$(INGRESS_PORT)  логин admin (дашборд sensor-gateway)"
+	@if [ "$${CI:-}" = "true" ]; then \
+	  echo "Пароль в лог не печатается (CI=true)."; \
+	  echo "  kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo"; \
+	elif [ "$${SHOW_SECRETS:-}" = "1" ]; then \
+	  printf '%s' "Пароль: "; \
+	  kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo; \
+	else \
+	  echo "Пароль не печатается. Напечатать значение: SHOW_SECRETS=1 make status"; \
+	  echo "  kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo"; \
+	fi
 	@echo "Демо: make k8s-canary | make k8s-canary-fail | make k8s-rollback-demo | make k8s-rotate-demo | make k8s-alert-demo"
 
 k8s-canary-fail:
