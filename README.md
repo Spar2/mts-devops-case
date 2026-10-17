@@ -312,77 +312,50 @@ make test
 
 ## Использование LLM
 
-В работе службы sensor-gateway языковой модели нет. LLM — опциональный локальный помощник SRE в конвейере:
-малая GGUF-модель на llama.cpp пишет черновик PrometheusRule по одной фразе и объясняет провал canary. Внешних API и ключей нет,
-`make up` / `make k8s-up` и CI от модели не зависят. Её системные промпты — `llm/prompts/*.txt`, журнал запусков — `llm/out/runs.jsonl`.
+### Что это
 
-### Локальная LLM в конвейере (опционально)
+В работе службы sensor-gateway языковой модели нет. LLM — опциональный локальный помощник: [Ternary-Bonsai-2-4B](https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf) Q2_0 (файл `Ternary-Bonsai-2-4B-Q2_0.gguf`, 1.21 ГБ, Apache-2.0, без токена; sha256 в `llm/models.tsv`, проверяет `make llm-fetch`) на llama.cpp, образ `ghcr.io/ggml-org/llama.cpp:server-b11681`. Только CPU (AVX2), без GPU. Лимит контейнера 2 ГБ (`LLM_MEM`, по умолчанию `2g` в `scripts/llm-up.sh`). Внешних API и ключей нет. `make up`, `make k8s-up` и CI модель не запускают: job `llm` гоняет валидатор (`make llm-test`), не llama-server.
 
-Модель не заменяет ни службу, ни проверки: она пишет черновик PrometheusRule по одной фразе и объясняет провал canary,
-а каждый результат проходит автоматическую проверку и ревью человека. `make up` / `make k8s-up` от неё не зависят.
+Пиковый RSS 1.66 ГБ (0.47 ГБ анонимной + 1.19 ГБ отображённых весов) и 14.5 ток/с — прежний замер на 6 потоках (`LLM_THREADS=6`), в повтор 2026-10-17 не снимались. По умолчанию сервер берёт `-t 4`. Запасной файл для машин с 8 ГБ — `LLM_NAME=ternary-bonsai-2-2b`; в этот день не запускался. Сравнение семи моделей — [docs/llm/model-choice.md](docs/llm/model-choice.md).
 
-- **Модель:** [prism-ml/Ternary-Bonsai-2-4B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf),
-  файл `Ternary-Bonsai-2-4B-Q2_0.gguf` (тернарные веса), **1.21 ГБ**, лицензия **Apache-2.0**, без gated-доступа и токена.
-  sha256 `64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4` (проверяется скриптом).
-- **Почему она:** из 7 замеренных моделей (Bonsai 1.7B/4B/8B 1-бит, Ternary-Bonsai-2 2B/4B, Qwen2.5-Coder 0.5B/1.5B)
-  оставлена моделью по умолчанию: Apache-2.0, без токена, файл 1.21 ГБ, upstream llama.cpp. Ток/с и память в
-  `docs/llm/model-choice.md` — прежний замер `-t 6`, в повтор 2026-10-17 не входили. Этот повтор (`make llm-up` по умолчанию, `-t 4`):
-  три фразы из того файла, с первой попытки valid одна из трёх (5xx, 16.88 с). Задержка 51.11 с, attempts 2, valid false.
-  Память 104.27 с, valid со второй попытки. `make llm-explain` — 66.67 с, attempts 1, valid. Журнал обоих прогонов — `docs/llm/examples/runs.jsonl`.
-- **Рантайм:** официальный `ghcr.io/ggml-org/llama.cpp:server-b11681` (upstream, форк PrismML не нужен), OpenAI-совместимый
-  API на `127.0.0.1:8090`, только CPU (AVX2), лимит контейнера 2 ГБ.
-- **Ресурсы:** пиковый RSS 1.66 ГБ (0.47 ГБ анонимной + 1.19 ГБ отображённых весов) и 14.5 ток/с — прежний замер на 6 потоках (`LLM_THREADS=6`), в повторе 2026-10-17 не снимались. По умолчанию `scripts/llm-up.sh` берёт `-t 4`. Времена повтора — выше и в `docs/llm/model-choice.md`. Для 8 ГБ машин: `LLM_NAME=ternary-bonsai-2-2b` (0.55 ГБ, ~0.7 ГиБ, 38 ток/с, слабее; в этот день не перезапускалась).
+### За что отвечает
+
+- Черновик правила алерта по одной фразе (`make llm-gen` → PrometheusRule).
+- Объяснение отката canary (`make llm-explain`). Если llama-server отвечает на `/health`, `scripts/canary.sh` после отката сам вызывает `scripts/llm-explain-hook.sh`: текст в консоль и в `llm/out/canary-explain-<время>.md`. Откат к этому моменту уже сделан. Хук всегда завершается с 0, таймаут `LLM_EXPLAIN_TIMEOUT` (240 с). Сервера нет — одна строка «объяснение пропущено». Выключить: `LLM_EXPLAIN=0`.
+- Черновик release notes (`make llm-notes`) из `git log` и diffstat. В коде это `llm/llm_gen.py notes` и промпт `llm/prompts/release-notes.system.txt`: разделы «Что изменилось», «Риски», «Как проверить», только по файлам из входа. В `docs/llm/examples/runs.jsonl` один такой прогон: `2026-10-17T04:40:03+0300`, 59.29 с, valid.
+
+### Как работать
 
 ```bash
-make llm-up                       # скачать веса с HF (sha256) в llm/models/ и запустить llama-server
-make llm-gen DESC="Critical when process_resident_memory_bytes is above 400MB for 10m"
-make llm-explain                  # объяснить провал canary по llm/examples/canary-fail.log (или LOG=файл)
-make llm-notes RANGE=HEAD~3..HEAD # черновик release notes из git log/diffstat
-make llm-test                     # тесты валидатора без модели (они же в CI, job llm)
+make llm-up
+make llm-gen DESC="Critical alert when service_probe_latency_seconds is above 1 second for 2 minutes"
+make llm-explain
+make llm-notes RANGE=HEAD~3..HEAD
+make llm-test
 make llm-down
 ```
 
-Что проверяется в `llm-gen` (`llm/llm_gen.py`): YAML; `apiVersion/kind`; DNS-1123 имя; `release: mon` (иначе
-kube-prometheus-stack не подхватит); CamelCase имя алерта; если есть `for` — формат duration (отсутствие `for` не ошибка); `severity` warning|critical; summary/description;
-`promtool check rules` (образ `prom/prometheus:v2.54.1`); `rate()`/`increase()` по gauge и regex в `=`-матчере.
-При ошибке — один раунд: ошибки валидатора уходят модели, результат проверяется снова; если не прошёл — код выхода 1.
-В `llm-explain` — две проверки: ответ на русском (доля кириллицы ≥ 0.5, иначе один повтор с просьбой перевести;
-промпт на русском с примером ответа) и отсутствие выдуманных чисел: каждое число из 3 и более цифр (HTTP-коды, метки времени, теги) должно быть в логе;
-числа из 1–2 цифр (например, веса 10 и 50) не сверяются.
+`service_probe_latency_seconds` — ряд, который API пишет на `/metrics` (`services/api/app/main.py`). Та же фраза — `DESC` по умолчанию в Makefile. Доля 5xx на стенде считается по `nginx_ingress_controller_requests` (метки `exported_namespace`, `status` в `deploy/monitoring/prometheusrule.yaml`), не по `http_requests_total`: у счётчика API своих меток нет.
 
-**Встроено в canary:** если llama-server доступен (`make llm-up`), `scripts/canary.sh` дублирует свой вывод в
-временный лог, а после отката вызывает `scripts/llm-explain-hook.sh`: объяснение печатается в консоль и пишется
-в `llm/out/canary-explain-<время>.md`. Откат к этому моменту уже выполнен; хук всегда завершается с 0, таймаут
-`LLM_EXPLAIN_TIMEOUT` (240 с), без LLM — одна строка «объяснение пропущено». Выключить: `LLM_EXPLAIN=0`.
-Проверено реальным прогоном `make k8s-canary-fail` на box: откат за ~32 с до объяснения, объяснение ~32 с
-(`docs/llm/examples/canary-rollback-hook.log`). В том прогоне ingress стенда не отвечал (HTTP 000 и для stable smoke —
-проблема стенда, не LLM); модель верно назвала упавшие проверки, но написала «stable прошёл», чего в логе не было —
-поэтому это подсказка, а не вердикт.
-Каждый запуск пишет в `llm/out/runs.jsonl`: модель, seed 42, temperature 0, файл системного промпта, полный пользовательский запрос (поле `user`; для explain — с хвостом лога), время, токены,
-результат валидации. Промпты — `llm/prompts/*.txt`.
+`make llm-up` качает веса в `llm/models/` и поднимает llama-server на `127.0.0.1:8090`. `make llm-explain` без `LOG` читает `llm/examples/canary-fail.log`. `make llm-test` — pytest валидатора без модели.
 
-Реальный вывод `make llm-explain` повтора 2026-10-17 (66.67 с, attempts 1, проверки пройдены):
+### Что проверяется автоматически
 
-```text
-- Что упало: проверка smoke `login` вернула HTTP 401 вместо 200 и отсутствовал сессионный токен `dts_session`.
-- Что сделал конвейер: вес canary выставлен в 0, релиз sensor-canary удалён через helm uninstall.
-- Затронут ли stable: нет — smoke stable прошёл успешно (HTTP 200, cookie dts_session).
-- Вероятная причина: canary не готов к работе из-за отсутствия валидного секрета (использовался `sensor-secrets-wrong`).
-- Что проверить дальше: `kubectl -n sensor describe secret sensor-secrets-wrong`, проверить логи контейнера api.
-```
+В `llm-gen` (`llm/llm_gen.py`): YAML; структура правила (`apiVersion`/`kind`, DNS-1123 имя, `release: mon`, CamelCase, duration если указан `for`, `severity` warning|critical, summary и description); `promtool check rules` (образ `prom/prometheus:v2.54.1`); белый список `llm/metrics_whitelist.yaml`. Неизвестная метрика или метка — невалидно. `histogram_quantile` только по ряду с суффиксом `_bucket` из этого списка. Отдельно: `rate()`/`irate()`/`increase()` по gauge и regex в `=`-матчере. При ошибке один раунд: текст ошибок уходит модели, ответ проверяется снова. Не прошёл — код выхода 1.
 
-`docs/llm/examples/prometheusrule-memory.generated.yaml` — ранний английский прогон, не повтор 2026-10-17. В `docs/llm/examples/runs.jsonl` две записи с задачей `Critical when process_resident_memory_bytes is above 400MB for 10m`: `2026-10-17T04:37:27+0300`, 15.71 с, attempts 1, valid, completion_tokens 145; `2026-10-17T04:38:04+0300`, 25.91 с, attempts 1, valid, completion_tokens 145. Текста правила в журнале нет, поэтому файл не привязан к одной из этих двух строк.
+В `llm-explain`: ответ на русском (доля кириллицы ≥ 0.5, иначе один повтор) и числа из 3+ цифр. Число должно быть отдельным токеном лога: `202` внутри даты `2026-10-16` не считается найденным. Числа из 1–2 цифр (веса 10 и 50) не сверяются.
 
-Повтор той же темы по-русски (`critical, если process_resident_memory_bytes > 400MB в течение 10m`): `2026-10-17T07:27:17+0000`, 104.27 с, attempts 2, valid, completion_tokens 152. YAML этого повтора в репозитории не сохранён.
+Каждый запуск пишет `llm/out/runs.jsonl`. Поле `model` — id загруженной модели (`GET /v1/models`), если сервер его не отдал — поле `model` ответа, иначе `LLM_MODEL`, иначе первая строка `llm/models.tsv`. Рядом seed 42, temperature 0, файл промпта, полный запрос (поле `user`), время, токены, результат. Промпты — `llm/prompts/*.txt`. Копия прогонов 2026-10-17 — `docs/llm/examples/runs.jsonl`.
 
-Метрика `process_resident_memory_bytes` сервис не отдаёт (в `services/api/app/main.py` нет `prometheus_client` и process collector); пример проверяет только синтаксис PromQL.
+### Ограничения
 
-Журнал прогонов — `docs/llm/examples/runs.jsonl`. Повтор rule0 (`critical, если service_probe_latency_seconds > 1 с в течение 2 мин`, 51.11 с, attempts 2, valid false): модель написала `sum(service_probe_latency_seconds{...}[2m])`, promtool отверг range vector, исправление тоже не прошло, `make llm-gen` завершился с кодом 1.
+Черновик правила — для ревью человеком, не для автодеплоя: promtool и белый список не проверяют смысл выражения. Объяснение — подсказка, откат от него не зависит. В `docs/llm/examples/canary-rollback-hook.log` откат уже записан в `2026-10-17T01:57:29Z`, объяснение печатается следом, строка `canary.sh rolled back` — `2026-10-17T01:58:01Z`. Модель назвала HTTP 000 и написала, что smoke stable прошёл, хотя этой строки в логе не было. Повтор `make llm-explain` 2026-10-17 (66.67 с, attempts 1, valid) — `docs/llm/examples/canary-fail-explain.md`, там снова «stable прошёл».
 
-Без ключа и без интернета: после `make llm-up` (единственный выход в сеть — скачивание весов и образов) всё работает
-офлайн, ключи не нужны. **Риски:** малая модель ошибается в смысле PromQL (валидные, но не те выражения) — поэтому
-правило — черновик для ревью, а не автодеплой; объяснение может перепутать
-детали — это подсказка, откат от неё не зависит. Повтор 2026-10-17: rule0 (задержка) 51.11 с, attempts 2, valid false; rule1 (5xx) 16.88 с, attempts 1, valid true; rule2 (память) 104.27 с, attempts 2, valid true; explain 66.67 с, attempts 1, valid true.
+Ответ в `docs/llm/examples/runs.jsonl` занимает от 15.71 с до 104.27 с. Повтор трёх фраз 2026-10-17 (`-t 4`), белого списка тогда не было: 5xx 16.88 с, attempts 1, valid (выражение с `status` у `http_requests_total` список сейчас отвергает); задержка 51.11 с, attempts 2, valid false (promtool: range vector в `sum`); память 104.27 с, attempts 2, valid по тем проверкам (`process_resident_memory_bytes` в списке нет). Explain 66.67 с, attempts 1, valid.
+
+`docs/llm/examples/prometheusrule-memory.generated.yaml` — ранний английский прогон, не повтор 2026-10-17. В журнале две строки задачи `Critical when process_resident_memory_bytes is above 400MB for 10m`: `2026-10-17T04:37:27+0300`, 15.71 с, attempts 1, valid, completion_tokens 145; `2026-10-17T04:38:04+0300`, 25.91 с, attempts 1, valid, completion_tokens 145. Текста правила в журнале нет, файл к одной из строк не привязан. Русский повтор той же темы (`2026-10-17T07:27:17+0000`, 104.27 с, attempts 2, completion_tokens 152) YAML в репозитории не оставил.
+
+После `make llm-up` сеть нужна только чтобы скачать веса и образы. Дальше запросы идут на `127.0.0.1:8090`, ключ не нужен.
 
 ## Troubleshooting
 

@@ -1,0 +1,57 @@
+# Белый список рядов Prometheus на стенде. Валидатор llm/llm_gen.py читает этот файл.
+# Новая метрика — новый ключ в metrics. Неизвестные имя и метка делают правило невалидным.
+# type: gauge | counter | histogram
+# labels: метки, которые есть на ряде после scrape (не выдуманные).
+#
+# API пишет три ряда без своих меток (services/api/app/main.py, обработчик /metrics).
+# Гистограммы нет: http_request_duration_seconds_bucket сервис не отдаёт.
+# namespace, service, pod, container, endpoint, job, instance — метки таргета ServiceMonitor.
+#
+# ingress-nginx 4.11.3, nginx_ingress_controller_requests. У контроллера своя метка namespace;
+# при honor_labels=false Prometheus переименовывает её в exported_namespace, а namespace
+# остаётся меткой таргета (namespace контроллера). Запросы стенда используют exported_namespace.
+#
+# kube_* — kube-state-metrics из kube-prometheus-stack, ряды из deploy/monitoring/prometheusrule.yaml.
+
+metrics:
+  service_up:
+    type: gauge
+    labels: [namespace, service, pod, container, endpoint, job, instance]
+  service_probe_latency_seconds:
+    type: gauge
+    labels: [namespace, service, pod, container, endpoint, job, instance]
+  http_requests_total:
+    type: counter
+    labels: [namespace, service, pod, container, endpoint, job, instance]
+  up:
+    type: gauge
+    labels: [namespace, service, pod, container, endpoint, job, instance]
+  nginx_ingress_controller_requests:
+    type: counter
+    labels:
+      - exported_namespace
+      - namespace
+      - host
+      - path
+      - method
+      - status
+      - ingress
+      - service
+      - canary
+      - controller_namespace
+      - controller_class
+      - controller_pod
+      - job
+      - instance
+      - pod
+      - container
+      - endpoint
+  kube_deployment_spec_replicas:
+    type: gauge
+    labels: [namespace, deployment, job, instance, pod, container, endpoint, service]
+  kube_deployment_status_replicas_available:
+    type: gauge
+    labels: [namespace, deployment, job, instance, pod, container, endpoint, service]
+  kube_pod_container_status_restarts_total:
+    type: counter
+    labels: [namespace, pod, container, uid, job, instance, endpoint, service]
