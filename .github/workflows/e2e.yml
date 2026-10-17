@@ -15,6 +15,9 @@ on:
       - "docs/**"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # github.ref: refs/heads/main (push и workflow_dispatch) или refs/pull/N/merge (pull_request).
 # Устаревший прогон того же PR отменяется. Прогон main не прерывается: при новом push он
 # остаётся в очереди той же группы, пока текущий не закончится.
@@ -47,7 +50,7 @@ jobs:
       KUBECONFIG: ${{ matrix.kubeconfig }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # Public DNS already maps sensor.localtest.me to 127.0.0.1. This hosts
       # line is a safety net (and adds grafana.localtest.me) if runner DNS does not.
@@ -58,6 +61,32 @@ jobs:
       # Helm, kubectl, and k3d with sudo. Hosted runners have passwordless sudo and Docker.
       - name: make up
         run: make up
+
+      # make status при CI=true пароль не печатает. Маска — на случай describe/curl дальше по job.
+      # Ротация ниже пишет новый DEMO_PASSWORD: его маскирует следующий такой же шаг.
+      - name: Mask stand passwords
+        if: always()
+        run: |
+          set -euo pipefail
+          mask_key() {
+            ns="$1"
+            secret="$2"
+            key="$3"
+            encoded=""
+            if ! encoded="$(kubectl -n "${ns}" get secret "${secret}" -o jsonpath="{.data.${key}}" 2>/dev/null)"; then
+              return 0
+            fi
+            if [ -z "${encoded}" ]; then
+              return 0
+            fi
+            value="$(printf '%s' "${encoded}" | base64 -d)"
+            if [ -n "${value}" ]; then
+              printf '::add-mask::%s\n' "${value}"
+            fi
+          }
+          mask_key sensor sensor-secrets DEMO_PASSWORD
+          mask_key sensor sensor-secrets SESSION_SECRET
+          mask_key monitoring grafana-admin admin-password
 
       - name: make k8s-netpol-check
         run: make k8s-netpol-check
@@ -70,6 +99,30 @@ jobs:
 
       - name: make k8s-rotate-demo
         run: make k8s-rotate-demo
+
+      - name: Mask stand passwords after rotation
+        if: always()
+        run: |
+          set -euo pipefail
+          mask_key() {
+            ns="$1"
+            secret="$2"
+            key="$3"
+            encoded=""
+            if ! encoded="$(kubectl -n "${ns}" get secret "${secret}" -o jsonpath="{.data.${key}}" 2>/dev/null)"; then
+              return 0
+            fi
+            if [ -z "${encoded}" ]; then
+              return 0
+            fi
+            value="$(printf '%s' "${encoded}" | base64 -d)"
+            if [ -n "${value}" ]; then
+              printf '::add-mask::%s\n' "${value}"
+            fi
+          }
+          mask_key sensor sensor-secrets DEMO_PASSWORD
+          mask_key sensor sensor-secrets SESSION_SECRET
+          mask_key monitoring grafana-admin admin-password
 
       - name: make k8s-alert-demo
         run: make k8s-alert-demo
