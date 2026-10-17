@@ -36,10 +36,10 @@
 | Сканирование образов | job `images` и job `iac` (config: чарт, Dockerfile, Terraform), `trivy-action` v0.36.0 (Trivy v0.70.0), HIGH/CRITICAL; SBOM (anchore/sbom-action) на `main` | Actions → images и iac | Образы: CVE (Starlette, OpenSSL в alpine) исправлены, прогон зелёный. Config: локально Trivy 0.70.0, чарт и Terraform без HIGH/CRITICAL; DS-0002 nginx-образа — `apps/web/.trivyignore` |
 | Публикация в registry | там же, push в `ghcr.io/spar2/mts-devops-case/*` только из `main` | Actions → images → Push images | Шаг выполняется в зелёном прогоне |
 | Проверка манифестов | `scripts/lint-manifests.sh` (kubeconform 0.6.7: stable, canary, два манифеста мониторинга), hadolint 2.12.0, shellcheck 0.10.0 | `make lint` | Проверено локально: `make lint` код 0. Сломанный YAML и скрипт с ошибкой shellcheck дают ненулевой код (правки откачены). Job `manifests` вызывает тот же скрипт |
-| CD: Helm + откат | `deploy/helm/sensor-gateway`, `scripts/deploy.sh` (`--atomic` + smoke + `helm rollback`) | `make k8s-rollback-demo` | Проверено: битый тег → откат `--atomic`; провал smoke → `helm rollback` (лог `docs/cd-demo-log.md`) |
+| CD: Helm + откат | `deploy/helm/sensor-gateway` (RollingUpdate `maxUnavailable: 0`, `preStop`), `scripts/deploy.sh` (`--atomic` + smoke + `helm rollback`) | `make k8s-rollback-demo` | Проверено: битый тег → откат `--atomic`; провал smoke → `helm rollback` (лог `docs/cd-demo-log.md`). С `preStop` полный прогон с нуля на box 2026-10-17: `make up`, canary, canary-fail, rollback-demo, alert-demo — PASS |
 | CD: canary через ingress | `scripts/canary.sh` (вес 10→50→100, smoke + PromQL: `up`, трафик и доля 5xx canary по метрикам ingress-nginx) | `make k8s-canary` | Проверено: успешный canary с promote и провальный canary с автооткатом, stable не задет (`docs/cd-demo-log.md`) |
 | Сессии не теряются между stable и canary | подписанная cookie (HMAC) в `services/api/app/main.py` | тесты + запрос с cookie от stable в canary | Проверено: 200 на canary с cookie, выданной stable |
-| Секреты вне git | SOPS 3.9.2 + age 1.2.1, `scripts/secrets-*.sh`, `deploy/secrets/README.md` | `scripts/secrets-rotate-check.sh` | Проверено: после ротации старый пароль и старая cookie → 401, новый пароль → 200 (`docs/secrets-rotation-log.md`) |
+| Секреты вне git | SOPS 3.9.2 + age 1.2.1, `scripts/secrets-*.sh`, `deploy/secrets/README.md` | `scripts/secrets-rotate-check.sh` | Лог 2026-10-17: старый пароль и cookie → 401, новый → 200 (`docs/secrets-rotation-log.md`). Без паузы перед SIGTERM на 1 реплике скрипт ловил 502; с `preStop` и ожиданием ухода старых подов в `secrets-rotate.sh` — 3 прогона подряд PASS на box 2026-10-17 |
 | Мониторинг: дашборд | `deploy/monitoring/` (kube-prometheus-stack 65.1.1) | Grafana → дашборд `sensor-gateway` | Проверено в k3d, скриншот `docs/img/grafana-sensor-gateway.png` |
 | Мониторинг: алерт | `deploy/monitoring/prometheusrule.yaml` | `kubectl -n sensor scale deploy sensor-api --replicas=0` | Проверено: `SensorGatewayDown` firing в Prometheus и в Alertmanager (`docs/monitoring-alert-proof.md`, скриншоты) |
 | Сеть ВМ (netplan) | `infra/cloud-init/network-config.yaml` → `libvirt_cloudinit_disk.network_config` | `cloud-init schema` (job `iac`); в госте `sudo netplan get`, `ip addr` | Схема валидна (cloud-init 26.1, job `iac`). На ВМ 2026-10-17: DHCP, `match: en*`, `ens3` получил `192.168.122.188/24`; адрес совпал с `terraform output vm_ip` и арендой libvirt |
@@ -229,6 +229,7 @@ make test
   `scripts/prom-forward.sh` и ждёт `/-/ready`. Любой провал → вес 0, удаление canary, `ROLLBACK canary: <причина>`.
   Успех → promote в stable через `deploy.sh`, удаление canary.
 - Stable smoke во время canary шлёт `X-Canary: never`, чтобы проверять именно stable.
+- У api и web RollingUpdate `maxUnavailable: 0`, `maxSurge: 1` и `preStop: sleep 5`: старый под не снимают, пока новый не Ready, и SIGTERM уходит только после паузы, чтобы Endpoints и kube-proxy успели убрать под. Иначе nginx web отдаёт 502. `terminationGracePeriodSeconds: 40` покрывает паузу и штатное завершение; uvicorn по SIGTERM сам перестаёт принимать соединения и дожидается текущих, отдельный обработчик в приложении не добавлялся.
 
 ### Видео
 
@@ -245,6 +246,7 @@ make test
 - **ВМ libvirt.** Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально: Terraform 1.9.8, провайдер 0.8.3 из lock-файла, `fmt -check`, `init -backend=false`, `validate` (без демона libvirt), `cloud-init schema` для `user-data.example.yaml` и `network-config.yaml`. `user-data.yaml.tftpl` схема не принимает: директивы `templatefile` ломают YAML. Живой `terraform apply` на box 2026-10-17 доведён при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false` (лог `docs/iac-apply-log.md`): загрузка, cloud-init `status: done`, netplan, клон, `vm_ip` совпал с DHCP, затем `terraform destroy`. Не запускались значения по умолчанию (8 ГиБ / 4 vCPU, `run_make_up=true`) и `make up K3D=0` внутри этой ВМ; нативный `make up K3D=0` по-прежнему только e2e. До успешного прогона экземпляр box пересоздали (оператор связывает это с нехваткой памяти). Повторный apply после возврата k3d не делался.
 - Доставка алертов: webhook в кластерный `alert-sink` (пишет тело в лог). Почта и мессенджеры не настраивались.
 - Видео: не записано в репозитории, его снимает команда (требования выше).
+- `rollout status` возвращается, когда новые поды Ready, а старые ещё ~5 с отвечают в `preStop` со старым секретом. Поэтому `secrets-rotate.sh` и `secrets-apply.sh` после него ждут, пока старые поды API исчезнут: только после этого старый пароль гарантированно даёт 401.
 
 ## Мониторинг и наблюдаемость
 
