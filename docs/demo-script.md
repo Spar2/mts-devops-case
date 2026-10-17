@@ -9,7 +9,7 @@
 | 0:20–0:50 | GitHub Actions: `ci` (линт, тесты, kubeconform, hadolint, shellcheck, IaC, Trivy, SBOM, push в GHCR) и `e2e` (k3d и k3s) | вкладка Actions, последний зелёный прогон |
 | 0:50–1:10 | Стенд: адреса и пароли, поды и релизы | `make status`, `kubectl get pods -A`, `helm list -A` |
 | 1:10–1:30 | Вход и probe в браузере | http://sensor.localtest.me:8081, логин `demo`, «Проверить службу» |
-| 1:30–2:20 | Canary 10→50→100: smoke и PromQL (up, трафик, 5xx по ingress-nginx), promote | `make k8s-canary` (ожидание анализа склеить) |
+| 1:30–2:20 | Canary: тег `<sha>-canary`, smoke версии, вес 10→50→100 (ответы и метрики ingress), PromQL, promote через вес 0 | `make k8s-canary` (ожидание выборки и анализа склеить) |
 | 2:20–2:50 | Провал canary → автооткат, stable не задет | `make k8s-canary-fail` |
 | 2:50–3:10 | Битый тег → откат `--atomic` | `make k8s-rollback-demo` |
 | 3:10–3:40 | Ротация секрета: старый пароль и cookie 401, новый 200 | `make k8s-rotate-demo` |

@@ -9,7 +9,7 @@
 Что есть на самом деле:
 
 - **CI (GitHub Actions, `ci.yml`).** На каждый push и pull request: линт, тесты, проверки манифестов, IaC (Terraform, Ansible, cloud-init, Trivy config), сборка, Trivy образов. Локально: `make lint` и `make test` — jobs `lint`, `api`, `web`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff` из job `llm`. Не входят job `images` и job `iac` (раздел «CI локально»). Только на `main`: SBOM и push образов в приватный GHCR.
-- **CD.** Выкладка в кластер идёт командами `make up`, `make k8s-deploy` и `make k8s-canary`: Helm `--atomic`, smoke, canary через ingress-nginx с PromQL-гейтом и автооткатом. По умолчанию образы собираются локально из того же коммита.
+- **CD.** Выкладка в кластер идёт командами `make up`, `make k8s-deploy` и `make k8s-canary`: Helm `--atomic`, smoke, canary через ingress-nginx с PromQL-гейтом и автооткатом. Stable собирается из текущего коммита. `make k8s-canary` собирает тот же исходник отдельным тегом `<sha>-canary`.
 - **e2e в Actions (`e2e.yml`).** На pull request в `main` (кроме правок только `*.md`/`docs/`) прогоняется только k3d. На push в `main` с тем же фильтром и вручную через `workflow_dispatch` — оба варианта, k3d и нативный k3s. Устаревший прогон того же PR отменяется; прогон `main` не прерывается. Секретов workflow не использует, образы собираются на раннере.
 - **Без CD-деплоя из Actions.** Отдельного деплоя в постоянный кластер из Actions нет: у проекта нет постоянного кластера, доступного GitHub.
 
@@ -37,7 +37,7 @@
 | Публикация в registry | там же, push в `ghcr.io/spar2/mts-devops-case/*` только из `main` | Actions → images → Push images | Шаг выполняется в зелёном прогоне |
 | Проверка манифестов | `scripts/lint-manifests.sh` (kubeconform 0.6.7: stable, canary, два манифеста мониторинга), hadolint 2.12.0, shellcheck 0.10.0 | `make lint` | Проверено локально: `make lint` код 0. Сломанный YAML и скрипт с ошибкой shellcheck дают ненулевой код (правки откачены). Job `manifests` вызывает тот же скрипт |
 | CD: Helm + откат | `deploy/helm/sensor-gateway` (RollingUpdate `maxUnavailable: 0`, `preStop`), `scripts/deploy.sh` (`--atomic` + smoke + `helm rollback`) | `make k8s-rollback-demo` | Проверено: битый тег → откат `--atomic`; провал smoke → `helm rollback` (лог `docs/cd-demo-log.md`). С `preStop` полный прогон с нуля на box 2026-10-17: `make up`, canary, canary-fail, rollback-demo, alert-demo — PASS |
-| CD: canary через ingress | `scripts/canary.sh` (вес 10→50→100, smoke + PromQL: `up`, трафик и доля 5xx canary по метрикам ingress-nginx) | `make k8s-canary` | Проверено: успешный canary с promote и провальный canary с автооткатом, stable не задет (`docs/cd-demo-log.md`) |
+| CD: canary через ingress | `scripts/canary.sh`: тег `CANARY_TAG` (по умолчанию `<sha>-canary`), `/ready` отдаёт его (`version` и `X-App-Version`), вес 10→50→100, smoke этой версии, доля ответов и доля canary-Ingress в допуске веса, PromQL (`up`, трафик, 5xx; NaN/Inf — откат), promote: stable → rollout → вес 0 → ingress → uninstall | `make k8s-canary` | Локально проверены разбор NaN/Inf, границы веса и парсер версии (`CANARY_SELF_TEST=1 ./scripts/canary.sh`), `bash -n`, shellcheck 0.10.0, `helm lint`/`template`, `make lint`, pytest `/ready`. Кластер не поднимался, живого прогона нового гейта нет. `docs/cd-demo-log.md` — прежний скрипт: тот же тег, что stable, без проверки веса, uninstall сразу после promote |
 | Сессии не теряются между stable и canary | подписанная cookie (HMAC) в `services/api/app/main.py` | тесты + запрос с cookie от stable в canary | Проверено: 200 на canary с cookie, выданной stable |
 | Секреты вне git | SOPS 3.9.2 + age 1.2.1, `scripts/secrets-*.sh`, `deploy/secrets/README.md` | `scripts/secrets-rotate-check.sh` | Лог 2026-10-17: старый пароль и cookie → 401, новый → 200 (`docs/secrets-rotation-log.md`). Без паузы перед SIGTERM на 1 реплике скрипт ловил 502; с `preStop` и ожиданием ухода старых подов в `secrets-rotate.sh` — 3 прогона подряд PASS на box 2026-10-17 |
 | Мониторинг: дашборд | `deploy/monitoring/` (kube-prometheus-stack 65.1.1) | Grafana → дашборд `sensor-gateway` | Проверено в k3d, скриншот `docs/img/grafana-sensor-gateway.png` |
@@ -83,7 +83,7 @@ flowchart LR
     prom -->|ServiceMonitor /metrics| capi
   end
   cd[deploy.sh / canary.sh: helm --atomic, smoke, PromQL-гейт, rollback] --> ns
-  cd -->|PromQL: up, трафик и 5xx canary| prom
+  cd -->|PromQL: up, трафик, 5xx и доля canary| prom
   prom -->|ServiceMonitor| ing
   user[Браузер] --> ing
   ing -->|stable| web
@@ -172,7 +172,7 @@ make up
 Демонстрации на поднятом стенде (каждая — одна команда, все прогоняются в GitHub Actions, job `e2e`):
 
 ```bash
-make k8s-canary          # canary 10 → 50 → 100: smoke + PromQL-гейт (up, трафик, доля 5xx по ingress-nginx), затем promote
+make k8s-canary          # образ <sha>-canary, вес 10→50→100: версия /ready, доля веса, PromQL (up, трафик, 5xx), promote через вес 0
 make k8s-canary-fail     # canary с неверным секретом → автоматический откат, stable не задет
 make k8s-rollback-demo   # битый тег образа → helm --atomic откатывает релиз, печатается helm history
 make k8s-rotate-demo     # ротация пароля: старый пароль и старая cookie → 401, новый → 200
@@ -220,14 +220,31 @@ make test
 - `scripts/deploy.sh TAG` — `helm upgrade --install --atomic --wait --timeout 3m`; если поды не стали ready, Helm откатывает
   релиз сам. Затем `scripts/smoke.sh` (`/ready`, `/metrics`, 401 без cookie, вход, `/api/v1/service`, probe); при провале
   `helm rollback sensor 0`, а если это была первая установка (откатываться некуда) — `helm uninstall sensor`.
-- `scripts/canary.sh TAG` — релиз `sensor-canary` с аннотациями ingress-nginx `canary`, `canary-weight`, `canary-by-header: X-Canary`.
-  На каждом шаге: smoke через `X-Canary: always`, нагрузка через ingress, затем PromQL (`up` canary — если Prometheus успел обнаружить target за 120 с; основной гейт — метрики ingress-nginx):
-  `min(up{namespace="sensor",service="sensor-canary-api"}) == 1`;
-  `sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m])) > 0`
-  (запросы именно через canary-апстрим ingress-nginx, пробы kubelet сюда не попадают);
-  доля 5xx среди них `< 0.05`. Prometheus недоступен → тоже откат, а не пропуск. Port-forward на 9090 поднимает
-  `scripts/prom-forward.sh` и ждёт `/-/ready`. Любой провал → вес 0, удаление canary, `ROLLBACK canary: <причина>`.
-  Успех → promote в stable через `deploy.sh`, удаление canary.
+- `make k8s-canary` собирает и импортирует `sensor-gateway` и `sensor-web` с тегом `CANARY_TAG`
+  (по умолчанию `<короткий sha>-canary`, команда не принимает тег, равный `TAG`) и вызывает `scripts/canary.sh`.
+  `make k8s-canary-fail` по-прежнему передаёт `TAG`: это образ stable после `make up`, проверяется отказ входа.
+- Чарт пишет тег образа API в `APP_VERSION`. `GET /ready` отдаёт его в JSON (`version`) и в заголовке `X-App-Version`.
+  Поле `version` у `GET /api/v1/service` остаётся `0.1.0`.
+- `scripts/canary.sh TAG` ставит релиз `sensor-canary` с аннотациями ingress-nginx `canary`, `canary-weight`,
+  `canary-by-header: X-Canary`. На каждом шаге (по умолчанию 10, 50, 100) ждёт, пока у backend canary
+  `trafficShapingPolicy.weight` в ingress-nginx станет равен шагу (до 90 с, `/dbg backends`). Дальше:
+  1. smoke через `X-Canary: always` и `EXPECT_VERSION` равный тегу canary: и JSON, и заголовок `/ready` должны совпасть с ним;
+  2. `WEIGHT_SAMPLE_N` запросов (по умолчанию 100) на `/ready` без заголовка. Доля ответов canary — целое `hits*100/N`.
+     Допуск: 10 → 2–25, 50 → 30–70, 100 → 100. Другой вес `w` от 1 до 99 — от `max(1, w-20)` до `min(99, w+20)`, вес 0 — только 0;
+  3. та же доля по приросту счётчика `nginx_ingress_controller_requests`: числитель `canary=~".+sensor-canary.+"`,
+     знаменатель — все запросы `exported_namespace="sensor"`. Перед базовой точкой пауза `WEIGHT_SETTLE_S` (20 с),
+     чтобы smoke с `X-Canary: always` уже попал в scrape (интервал ServiceMonitor ingress-nginx — 15 с).
+     Прирост общего счётчика меньше 80% серии за `WEIGHT_METRIC_WAIT_S` (60 с) — откат. Процент метрик — ближайшее целое;
+  4. PromQL: `min(up{namespace="sensor",service="sensor-canary-api"}) == 1`, если target появился за 120 с;
+     `sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m])) > 0`
+     (это canary-апстрим ingress-nginx, пробы kubelet сюда не попадают);
+     доля 5xx среди них `>= 0` и `< 0.05`.
+     `NaN`, `+Inf`, `-Inf`, пустое и нечисловое значение на любом из этих трёх запросов — откат.
+     На awk Ubuntu (mawk) `NaN` и `Inf` становятся 0, поэтому голое сравнение «меньше 0.05» приняло бы пустой знаменатель.
+  Prometheus недоступен → тоже откат, а не пропуск. Port-forward на 9090 поднимает `scripts/prom-forward.sh` и ждёт `/-/ready`.
+  Любой провал → вес 0, удаление canary, `ROLLBACK canary: <причина>`. Stable при отказе гейта не меняется.
+  Успех: `deploy.sh` обновляет stable на тег canary и ждёт rollout (`kubectl rollout status` api и web),
+  затем вес canary в 0, то же ожидание weight в ingress-nginx, и только потом `helm uninstall sensor-canary`.
 - Stable smoke во время canary шлёт `X-Canary: never`, чтобы проверять именно stable.
 - У api и web RollingUpdate `maxUnavailable: 0`, `maxSurge: 1` и `preStop: sleep 5`: старый под не снимают, пока новый не Ready, и SIGTERM уходит только после паузы, чтобы Endpoints и kube-proxy успели убрать под. Иначе nginx web отдаёт 502. `terminationGracePeriodSeconds: 40` покрывает паузу и штатное завершение; uvicorn по SIGTERM сам перестаёт принимать соединения и дожидается текущих, отдельный обработчик в приложении не добавлялся.
 
@@ -238,6 +255,7 @@ make test
 
 ### Что не проверено и ограничения
 
+- **Canary-гейт с отдельным тегом** (доля веса по ответам и по счётчику ingress-nginx, отказ на NaN/Inf, promote через вес 0) на кластере не запускался. Локально проверены только разбор чисел и границы (`CANARY_SELF_TEST=1 ./scripts/canary.sh`), линтеры и pytest `/ready`. `docs/cd-demo-log.md` описывает прежний скрипт.
 - **Нативный k3s на Ubuntu** (`make up K3D=0`) проверен только в GitHub Actions (e2e, `ubuntu-24.04`). На box его нет: в песочнице нет systemd и vxlan.
   Для k3d-прогонов на box понадобились параметры
   `K3D_PRELOAD=1` (из подов нет egress), `INGRESS_SERVICE_TYPE=NodePort` (не работает hostPort) и host-gw вместо vxlan —
@@ -251,7 +269,7 @@ make test
 ## Мониторинг и наблюдаемость
 
 - Сервис отдаёт `/health`, `/ready`, `/metrics` (`service_up`, `http_requests_total`, `service_probe_latency_seconds`).
-- Метрики ingress-nginx (`controller.metrics.enabled`, ServiceMonitor `deploy/monitoring/ingress-nginx-servicemonitor.yaml`): по ним считаются трафик и 5xx canary.
+- Метрики ingress-nginx (`controller.metrics.enabled`, ServiceMonitor `deploy/monitoring/ingress-nginx-servicemonitor.yaml`, интервал 15 с): по ним считаются трафик, доля 5xx canary и доля запросов canary-Ingress (label `canary`) от всех запросов namespace `sensor`.
 - ServiceMonitor из чарта (label `release: mon`) подключает `/metrics` stable и canary к Prometheus.
 - Дашборд Grafana `sensor-gateway` (`deploy/monitoring/dashboard-configmap.yaml`): число живых таргетов API, `up` по таргетам, req/s по сервисам, задержка probe (без порога), доля 5xx через ingress-nginx.
 
@@ -386,12 +404,15 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; �
 - После входа снова форма — открывать именно `http://127.0.0.1:8080`, не файл и не другой хост.
 - Образ не собирается — нужен BuildKit и Compose V2 (есть в Ubuntu 24.04).
 - `make up K3D=0` падает на установке k3s — нужен sudo и доступ к get.k3s.io (режим k3d по умолчанию get.k3s.io не использует); повторный запуск идемпотентен.
-- Поды в `ImagePullBackOff` — образы приложения не импортированы: `make k8s-images`; при закрытом egress из подов `K3D_PRELOAD=1` подгружает в k3d сторонние образы (ingress-nginx, мониторинг, alert-sink), образы приложения всегда импортирует `make k8s-images`.
+- Поды в `ImagePullBackOff` — образы приложения не импортированы: stable — `make k8s-images` (тег `TAG`), canary — `make k8s-canary` (тег `CANARY_TAG`). При закрытом egress из подов `K3D_PRELOAD=1` подгружает в k3d сторонние образы (ingress-nginx, мониторинг, alert-sink).
 - `sensor.localtest.me` не открывается — DNS не отдаёт 127.0.0.1: добавить `127.0.0.1 sensor.localtest.me grafana.localtest.me` в `/etc/hosts`.
 - Smoke падает на входе после смены секрета — Secret читается подами при старте; `scripts/secrets-apply.sh` сам делает `rollout restart`.
 - `Ключ age этой машины не совпадает с получателем` — файл зашифрован другим ключом: удалить `deploy/secrets/sensor-secrets.enc.yaml`
   и запустить `scripts/secrets-init.sh` заново (будет новый пароль).
-- Canary откатился с `prometheus returned no sample` — Prometheus ещё не снял две точки: увеличить `ANALYSIS_WAIT_S` (по умолчанию 75 с).
+- Canary откатился с `not a finite number` — Prometheus вернул NaN, Inf или нечисло. У доли 5xx так бывает, когда в знаменателе нет трафика: это откат, а не «ниже 0.05».
+- Canary откатился с `response share` или `ingress canary share` — доля canary не попала в допуск веса. Если `CANARY_TAG` совпадает с версией, которую уже отдаёт stable, шаг 10 даёт около 100% и тоже откатывается.
+- `CANARY_TAG совпадает с TAG` — `make k8s-canary` требует другой тег. По умолчанию берётся `<sha>-canary`.
+- Canary откатился с `prometheus returned no sample` или счётчик ingress «rose by» меньше 80% серии — Prometheus ещё не снял точки: увеличить `ANALYSIS_WAIT_S` (75 с) или `WEIGHT_METRIC_WAIT_S` (60 с). Пауза перед выборкой веса — `WEIGHT_SETTLE_S` (20 с).
 - Canary откатился с `prometheus unreachable` — нет доступа к Prometheus на 9090: смотреть `/tmp/prom-forward.log`
   (port-forward поднимает `scripts/prom-forward.sh`) или задать `PROM_URL`.
 - `make k8s-netpol-check` падает с `REACHED` из чужого namespace — в кластере не работает контроллер NetworkPolicy
