@@ -100,3 +100,72 @@ Rewrite scripts/canary.sh: for each weight step (default 10 50 100) helm upgrade
 давало пустой ответ — найдено в реальном прогоне); smoke не принимал точку в подписанной cookie; Ansible
 переписан в обёртку над `make k8s-up` (версия модели дублировала логику и обходила SOPS);
 секрет применялся без перезапуска подов — добавлен `rollout restart` при изменении.
+
+## Третья волна (аудит жюри и доработки)
+
+Общая преамбула всех сессий волны:
+
+```text
+Repo /workspace/mts-devops-case (MTS hackathon case 1, DevOps pipeline). Read README.md, Makefile, scripts/, deploy/ first. `make up` now = full path: scripts/k3s-install.sh (K3D=1 default: k3d cluster "mts", k3s v1.31.4, ingress-nginx 4.11.3, LB port 8081) -> secrets-init/apply (SOPS, Secret sensor-secrets in ns sensor with DEMO_PASSWORD, SESSION_SECRET) -> monitoring-install.sh (kube-prometheus-stack 65.1.1 release "mon" ns monitoring) -> build images ghcr.io/spar2/mts-devops-case/sensor-{gateway,web}:<sha>, k3d image import -> scripts/deploy.sh (helm release "sensor" ns sensor, chart deploy/helm/sensor-gateway, --atomic + scripts/smoke.sh). App via http://sensor.localtest.me:8081. Write ONLY files assigned to you, no git commands. Pin versions. Keep it small. When done print changed files and what you verified (only claim what you actually ran).
+
+```
+
+### auditA
+
+```text
+You are a strict hackathon jury member. Read /workspace/mts-devops-case/README.md (and skim docs/, Makefile). Do NOT modify any file, do not run git write commands. Audit the README against the MANDATORY template; headings must exist verbatim and in this order: "Название кейса"; "Описание проблемы"; "Цель работы"; "Состав команды (роли, опыт и навыки)"; "Архитектура/схема"; "Использованные инструменты с версиями"; "Как запустить (git clone …; make up)"; "Мониторинг и наблюдаемость"; "Безопасность"; "Использование LLM"; "Troubleshooting"; "Лицензия". Also check: every claim is backed by a file/log in repo, versions are concrete, mermaid diagram is valid and matches the code, resource requirements stated, no invented team biographies, no claims of jury approval, LLM section includes prompts, time saved, external API risks, how to verify without a key. Write findings as a numbered list (severity: blocker/major/minor, exact location, concrete fix) to /tmp/gp3/auditA.md. Be concrete and terse.
+
+```
+
+### auditB
+
+```text
+You are a strict DevOps hackathon jury member. Repo /workspace/mts-devops-case. Do NOT modify any repo file, no git writes. Case 1 requirements: (1) IaC: VM/local stand, k3s and network (Terraform/Ansible/cloud-init, netplan) — expected target stack OpenStack + Kubernetes but k3s/single-node allowed; (2) CI: build image and push to registry on push, scan (Trivy); (3) CD: Helm/Kustomize, blue-green or canary via ingress, rollback on failed release; (4) secrets via SOPS/Sealed Secrets/Vault with rotation described; (5) Prometheus+Grafana: at least one dashboard and one alert; (6) video <=5 min. General rules: Ubuntu reproduction with at most 3 commands (git clone, cd, make up) for the FULL solution, only open charts from public repos with versions, resources within 8-16 GB, small repo. Read the expert call transcript /home/box/agent-data/agents/debd819f-724d-4553-8015-d961ddac8370/attachments/bfa15027207fb7289dfe1c27d47ba1d518ff722232fbaf4de7fecb6d42a61a7c.txt (only DevOps case 1 and general rules; ignore SRE case 2) and extract nuances. Then audit the repo (README, Makefile, scripts/, deploy/, infra/, .github/workflows/ci.yml, docs/). Pay special attention to: whether the FULL solution (cluster+CD+monitoring) is reachable in 3 commands; jury access to images if GHCR packages are private; pinned versions; diagram accuracy; OpenStack fit (is there a path or explanation); netplan/cloud-init; resource numbers; repo size; anything that would fail on a clean Ubuntu 24.04 with docker (e.g. missing tools, sudo assumptions, /etc/hosts, ports). Write numbered findings (blocker/major/minor, location, concrete fix) plus a short list of transcript nuances to /tmp/gp3/auditB.md.
+
+```
+
+### M
+
+```text
+TASK M (alert delivery). Make Alertmanager deliver alerts to an in-cluster webhook sink so delivery is provable: add deploy/monitoring/alert-sink.yaml (Deployment+Service "alert-sink" in ns monitoring, image mendhak/http-https-echo:34 (pinned), port 8080, small resources, logs request bodies). In deploy/monitoring/values-kube-prometheus-stack.yaml configure alertmanager.config: route default receiver "null" but a child route matching alertname=~"SensorGateway.*" -> receiver "sensor-webhook" (webhook_configs url http://alert-sink.monitoring.svc:8080/alert, send_resolved true), group_wait 10s, group_interval 30s, repeat_interval 1h; keep Watchdog/InfoInhibitor going to null. Update scripts/monitoring-install.sh to kubectl apply alert-sink.yaml and wait for its rollout. Create scripts/alert-demo.sh: scales deploy sensor-api in ns sensor to 0, polls Prometheus alerts API WITHOUT port-forward via `kubectl -n monitoring exec prometheus-mon-kube-prometheus-stack-prometheus-0 -c prometheus -- wget -qO- http://127.0.0.1:9090/api/v1/alerts` every 10s up to 5 min until SensorGatewayDown is firing (print pending/firing transitions with timestamps), then checks Alertmanager API the same way (alertmanager-mon-kube-prometheus-stack-alertmanager-0 -c alertmanager, port 9093, /api/v2/alerts) and waits up to 90s until `kubectl -n monitoring logs deploy/alert-sink` contains SensorGatewayDown, prints PASS lines; ALWAYS restores replicas to 1 via trap and waits rollout; exit non-zero on failure. Also update deploy/monitoring/README.md. Validate: `helm template mon prometheus-community/kube-prometheus-stack --version 65.1.1 -f deploy/monitoring/values-kube-prometheus-stack.yaml` renders (repo may need `helm repo add prometheus-community https://prometheus-community.github.io/helm-charts`), shellcheck scripts/alert-demo.sh scripts/monitoring-install.sh, kubectl apply --dry-run=client -f alert-sink.yaml (no cluster is running; do not create clusters). Only touch deploy/monitoring/*, scripts/monitoring-install.sh, scripts/alert-demo.sh.
+
+```
+
+### H
+
+```text
+TASK H (chart hardening). In deploy/helm/sensor-gateway: (1) api container securityContext: runAsNonRoot, runAsUser 65534, allowPrivilegeEscalation false, readOnlyRootFilesystem true (mount emptyDir at /tmp if needed), capabilities drop ALL, seccompProfile RuntimeDefault; pod automountServiceAccountToken false. (2) web (nginx:1.29-alpine runs as root on port 80): allowPrivilegeEscalation false, capabilities drop ALL add [CHOWN, SETUID, SETGID, NET_BIND_SERVICE, DAC_OVERRIDE] (whatever nginx master needs), seccompProfile RuntimeDefault; emptyDir for /var/cache/nginx and /var/run if you set readOnlyRootFilesystem (only if it works with stock nginx image; otherwise leave writable). (3) NetworkPolicy template (values networkPolicy.enabled default true): api pods accept ingress on 8000 only from web pods of the same release and from namespace monitoring (Prometheus scrape) — use namespaceSelector kubernetes.io/metadata.name: monitoring; web pods accept ingress on 80 only from namespace ingress-nginx. (4) PodDisruptionBudget for api and web (values pdb.enabled default true, maxUnavailable 1 — note with 1 replica minAvailable would block drains; use maxUnavailable: 1). Keep labels/selectors unchanged (canary release must still work: its web proxies to <release>-api). Validate: helm lint, helm template for stable and canary (--set track=canary --set canary.enabled=true --set canary.weight=10), and kubeconform if available at /tmp/bin/kubeconform (download v0.6.7 from github releases to /tmp/bin if missing) with -strict. Also run the api image locally with docker to confirm read-only root works: `docker build -t api-ro services/api && docker run --rm -d --name api-ro --read-only --tmpfs /tmp -e DEMO_PASSWORD=demo-stand-pass-123 -p 18000:8000 api-ro` then curl --noproxy '*' http://127.0.0.1:18000/ready, then docker rm -f api-ro. Same idea for web with --cap-drop ALL --cap-add the caps you chose (run `docker run --rm -d --name web-t --cap-drop ALL --cap-add ... -p 18080:80 <built web image>`; curl / should return 200), then remove. Only touch deploy/helm/sensor-gateway/.
+
+```
+
+### E
+
+```text
+TASK E (live CD proof in GitHub Actions). Create .github/workflows/e2e.yml: name e2e; on push to main (paths-ignore: '**.md', 'docs/**') and workflow_dispatch; concurrency group e2e cancel-in-progress. One job on ubuntu-24.04, timeout-minutes 40, permissions contents read: checkout; run exactly `make up` (this is the jury path; it installs helm/kubectl/k3d itself via scripts/k3s-install.sh with sudo, runners have passwordless sudo and docker; sensor.localtest.me resolves to 127.0.0.1 via public DNS, but add `echo "127.0.0.1 sensor.localtest.me grafana.localtest.me" | sudo tee -a /etc/hosts` as a safety step and note it); then run demo steps each as separate named steps: `make k8s-canary-fail`, `make k8s-rollback-demo`, `make k8s-rotate-demo`, `make k8s-alert-demo` (alert demo script scripts/alert-demo.sh is being written by another session; reference the make target anyway), then `make k8s-canary` with env ANALYSIS_WAIT_S=75; finally a step `if: always()` that collects diagnostics (kubectl get pods -A, helm list -A, kubectl -n sensor describe pods | tail -n 100, kubectl -n monitoring get pods) and a step `if: always()` that runs `make down`. Use env INGRESS_PORT=8081 at job level. Do NOT run anything locally that creates clusters (box has low memory). Validate the YAML with actionlint v1.7.3 (download binary from github releases into /tmp/bin) and fix all findings. Only create .github/workflows/e2e.yml.
+
+```
+
+### R
+
+```text
+Отредактируй README.md в этом репозитории (только README.md, docs/demo-script.md). Заголовки верхнего уровня и их порядок НЕ менять. Исправить по аудиту /tmp/gp3/auditA.md и /tmp/gp3/auditB.md (прочитай оба). Обязательно:
+- удалить фразу о том, что эксперты/жюри допустили Compose или что-либо подтвердили;
+- ресурсы: честно — ingress-nginx и kube-prometheus-stack частично без limits, указать запросы/лимиты чарта приложения из deploy/helm/sensor-gateway/values.yaml;
+- rate-limit: лимит на процесс API, ключ — адрес пира (nginx), а не клиента;
+- версии: k3d v5.8.3, k3s v1.31.4+k3s1, React и Vite — взять точные из apps/web/package.json, Trivy action v0.36.0 / engine v0.70.0, shellcheck, hadolint, kubeconform 0.6.7, actionlint;
+- PromQL примеры с namespace="sensor";
+- заметка: проект ingress-nginx объявлен архивным (2026-03-24), используется закреплённая версия 4.11.3;
+- в Безопасности: securityContext (readOnlyRootFilesystem, drop ALL, seccomp RuntimeDefault, без токена SA), NetworkPolicy (вход к API только от web и ingress-nginx, к web только от ingress-nginx; проверяется `make k8s-netpol-check` в e2e на GitHub; в песочницах без ipset контроллер k3s не стартует и политика не применяется — честно), PDB, SBOM (CycloneDX/SPDX артефакт в CI на main), токен k3s остаётся в user-data/ISO cloud-init;
+- Мониторинг: alert-sink (webhook, mendhak/http-https-echo:34) и `make k8s-alert-demo`;
+- новые make-цели: k8s-canary-fail, k8s-rotate-demo, k8s-alert-demo, k8s-netpol-check; e2e workflow (.github/workflows/e2e.yml, матрица k3d и нативный k3s);
+- раздел «Что не проверено»: terraform apply не выполнялся (только validate + cloud-init schema), видео не записано (требования: ≤5 мин, монтаж допустим, без сгенерированных кадров).
+Не выдумывай фактов, не пиши TODO. docs/demo-script.md: привести под `make up` и новые цели.
+
+```
+
+Сессия R (правка README) зависла без результата больше 30 минут и была остановлена; README по аудитам правил человек.
+Ручные правки третьей волны: пробы web перестали ходить в API (падение API перезапускало web); проверка NetworkPolicy
+вынесена в `scripts/netpol-check.sh` (в песочнице без ipset политика не применяется — найдено прогоном); метрический гейт canary
+переведён на метрики ingress-nginx, а недоступный Prometheus теперь откатывает canary (раньше `pgrep -f` находил сам себя,
+port-forward не поднимался и гейт молча пропускался); ожидание появления target canary в Prometheus; пароль Grafana в SOPS;
+kubeconfig 600; алерты NoReplicas/PodRestarts вместо бесполезного SlowProbe; resolved в alert-demo; откат первой установки через uninstall.

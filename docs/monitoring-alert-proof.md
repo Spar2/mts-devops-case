@@ -69,3 +69,19 @@ Receiver в демо `null`: доставка в почту или чат не �
     }
 ]
 ```
+
+## Доставка на webhook и resolved (`make k8s-alert-demo`, box, k3d, 2026-10-17)
+
+Алерт уходит не в `null`, а в receiver `sensor-webhook` → `alert-sink`. Сокращённый вывод прогона (время UTC):
+
+```text
+PASS prometheus SensorGatewayDown firing
+2026-10-17T01:27:48Z alertmanager SensorGatewayDown active receivers=sensor-webhook
+PASS alertmanager SensorGatewayDown active
+PASS alert-sink log contains SensorGatewayDown
+2026-10-17T01:27:58Z scaling deployment/sensor-api back to 1
+deployment "sensor-api" successfully rolled out
+PASS SensorGatewayDown resolved; alert-sink got status resolved
+```
+
+Тот же сценарий выполняется в GitHub Actions, workflow `e2e`, шаг `make k8s-alert-demo` (k3d и нативный k3s).
