@@ -11,6 +11,7 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 os.environ["LLM_NO_DOCKER"] = "1"
+os.environ["LLM_SKIP_PROMTOOL"] = "1"
 sys.path.insert(0, HERE)
 import llm_gen  # noqa: E402
 
@@ -103,3 +104,11 @@ def test_generate_with_repair_against_fake_server(tmp_path):
 def test_cyrillic_share():
     assert llm_gen.cyrillic_share("- Что упало: smoke `login` вернула HTTP 401") > 0.5
     assert llm_gen.cyrillic_share("- Check failed: smoke login returned 401") < 0.1
+
+
+def test_promtool_missing_is_error(monkeypatch):
+    monkeypatch.delenv("LLM_SKIP_PROMTOOL", raising=False)
+    monkeypatch.setattr(llm_gen.shutil, "which", lambda name: None)
+    doc = {"spec": {"groups": [{"name": "g", "rules": [{"alert": "A", "expr": "up == 0"}]}]}}
+    errs = llm_gen.promtool_check(doc)
+    assert errs and "promtool" in errs[0]

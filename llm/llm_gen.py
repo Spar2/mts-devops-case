@@ -117,7 +117,8 @@ def validate_rule_text(text):
 
 
 def promtool_check(doc):
-    """promtool check rules on spec (PromQL syntax). Skipped (not failed) without docker/promtool."""
+    """promtool check rules on spec (PromQL syntax). Without promtool and docker this is an error,
+    unless LLM_SKIP_PROMTOOL=1 is set explicitly (unit tests)."""
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, dir=tempfile.gettempdir()) as f:
         yaml.safe_dump(doc["spec"], f)
         path = f.name
@@ -128,8 +129,11 @@ def promtool_check(doc):
         cmd = ["docker", "run", "--rm", "--entrypoint", "promtool", "-v", f"{path}:/r.yaml:ro",
                PROMTOOL_IMAGE, "check", "rules", "/r.yaml"]
     else:
-        print("validate: promtool недоступен — проверка PromQL пропущена", file=sys.stderr)
-        return []
+        os.unlink(path)
+        if os.environ.get("LLM_SKIP_PROMTOOL") == "1":
+            print("validate: LLM_SKIP_PROMTOOL=1 — проверка PromQL пропущена явно", file=sys.stderr)
+            return []
+        return ["promtool недоступен (нет ни promtool, ни docker): PromQL не проверен"]
     p = subprocess.run(cmd, capture_output=True, text=True)
     os.unlink(path)
     if p.returncode != 0:
