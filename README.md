@@ -258,7 +258,7 @@ make down                # удалить кластер (и Compose-демо, �
   ближайшего пира, то есть nginx web, а не конечного клиента: это грубый лимит на под, а не на пользователя.
 - CI: Trivy блокирует образ с исправимыми HIGH/CRITICAL; push в GHCR только из `main`; `GITHUB_TOKEN` с `contents: read`, `packages: write`.
 - Grafana: пароль администратора случайный, лежит в SOPS-файле `deploy/secrets/grafana-admin.enc.yaml` (не в git), в кластер
-  попадает Secret `grafana-admin` (`admin.existingSecret`). Смена пароля — `scripts/grafana-rotate.sh` (не проверена прогоном).
+  попадает Secret `grafana-admin` (`admin.existingSecret`). Смена пароля — `scripts/grafana-rotate.sh` (проверено на box: старый пароль → 401, новый → 200).
 - Поды приложения: seccomp `RuntimeDefault`, `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem` (запись только в emptyDir), без токена ServiceAccount.
   API: `runAsNonRoot`, uid 65534, `drop: [ALL]`. Web (nginx): мастер-процесс стартует от root и
   сбрасывает права на воркеры, поэтому `drop: [ALL]` плюс только `CHOWN, SETUID, SETGID, NET_BIND_SERVICE, DAC_OVERRIDE`.

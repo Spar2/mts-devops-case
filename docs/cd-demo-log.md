@@ -100,3 +100,89 @@ Cookie получена на stable (`X-Canary: never`), запрос с ней 
 ## 4. Откат по smoke (не --atomic)
 
 Первая выкладка образа с подписанными сессиями: smoke не принял новый формат cookie → `helm rollback sensor 0`, stable остался на прежней ревизии. После исправления smoke выкладка прошла.
+
+## Повторный прогон после перевода гейта на ingress-nginx (box, k3d, коммит 6afb9a3, 2026-10-17, время UTC)
+
+Стенд поднят `make up` в клоне `/tmp/fresh` (k3d-кластер на тот момент уже существовал, скрипт идемпотентен). Ниже шаги, PromQL и итог без строк Helm NOTES.
+
+### `make k8s-canary`
+
+```text
+2026-10-17T02:14:20Z canary 6afb9a3 weights: 10 50 100
+2026-10-17T02:14:20Z installing sensor-canary tag 6afb9a3 weight 10
+2026-10-17T02:14:33Z smoke X-Canary: always at weight 10
+PASS POST /api/v1/service/probe 200
+2026-10-17T02:14:33Z PASS smoke at weight 10
+2026-10-17T02:14:53Z prometheus sees sensor-canary-api after 20s
+2026-10-17T02:16:09Z query min(up{namespace="sensor",service="sensor-canary-api"})
+2026-10-17T02:16:09Z min(up sensor-canary-api)=1
+2026-10-17T02:16:09Z query sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m]))
+2026-10-17T02:16:09Z canary ingress request rate=0.09361296296296297/s
+2026-10-17T02:16:09Z query (sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+",status=~"5.."}[2m])) or vector(0)) / sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m]))
+2026-10-17T02:16:09Z canary 5xx ratio=0
+2026-10-17T02:16:09Z PASS metrics at weight 10
+2026-10-17T02:16:09Z PASS canary weight 10
+2026-10-17T02:16:09Z installing sensor-canary tag 6afb9a3 weight 50
+2026-10-17T02:16:09Z smoke X-Canary: always at weight 50
+PASS POST /api/v1/service/probe 200
+2026-10-17T02:16:10Z PASS smoke at weight 50
+2026-10-17T02:16:10Z prometheus sees sensor-canary-api after 0s
+2026-10-17T02:17:25Z query min(up{namespace="sensor",service="sensor-canary-api"})
+2026-10-17T02:17:25Z min(up sensor-canary-api)=1
+2026-10-17T02:17:25Z query sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m]))
+2026-10-17T02:17:25Z canary ingress request rate=0.15238095238095237/s
+2026-10-17T02:17:25Z query (sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+",status=~"5.."}[2m])) or vector(0)) / sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m]))
+2026-10-17T02:17:25Z canary 5xx ratio=0
+2026-10-17T02:17:25Z PASS metrics at weight 50
+2026-10-17T02:17:25Z PASS canary weight 50
+2026-10-17T02:17:25Z installing sensor-canary tag 6afb9a3 weight 100
+2026-10-17T02:17:25Z smoke X-Canary: always at weight 100
+PASS POST /api/v1/service/probe 200
+2026-10-17T02:17:26Z PASS smoke at weight 100
+2026-10-17T02:17:26Z prometheus sees sensor-canary-api after 0s
+2026-10-17T02:18:41Z query min(up{namespace="sensor",service="sensor-canary-api"})
+2026-10-17T02:18:41Z min(up sensor-canary-api)=1
+2026-10-17T02:18:41Z query sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m]))
+2026-10-17T02:18:41Z canary ingress request rate=0.15238095238095237/s
+2026-10-17T02:18:41Z query (sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+",status=~"5.."}[2m])) or vector(0)) / sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m]))
+2026-10-17T02:18:41Z canary 5xx ratio=0
+2026-10-17T02:18:41Z PASS metrics at weight 100
+2026-10-17T02:18:41Z PASS canary weight 100
+2026-10-17T02:18:41Z promoting 6afb9a3 to stable via deploy.sh
+PASS POST /api/v1/service/probe 200
+2026-10-17T02:18:41Z uninstalling sensor-canary after promote
+2026-10-17T02:18:42Z PASS canary promoted 6afb9a3
+rc=0
+```
+
+### `make k8s-canary-fail` (Secret с другим паролем → smoke canary падает → откат)
+
+```text
+2026-10-17T02:18:42Z using tag 6afb9a3
+2026-10-17T02:18:42Z creating Secret sensor-secrets-wrong in namespace sensor
+2026-10-17T02:18:42Z running canary.sh; smoke login should fail and roll the canary back
+2026-10-17T02:18:42Z canary 6afb9a3 weights: 10 50 100
+2026-10-17T02:18:42Z CANARY_HELM_ARGS: --set existingSecret=sensor-secrets-wrong
+2026-10-17T02:18:42Z installing sensor-canary tag 6afb9a3 weight 10
+2026-10-17T02:18:54Z smoke X-Canary: always at weight 10
+PASS ready 200
+PASS metrics contains service_up 1
+PASS GET /api/v1/service without cookie 401
+FAIL login: HTTP 401, expected 200 and cookie dts_session
+FAIL GET /api/v1/service with cookie: no session
+FAIL POST /api/v1/service/probe: no session
+2026-10-17T02:18:54Z setting canary weight 0
+2026-10-17T02:18:55Z helm uninstall sensor-canary
+2026-10-17T02:18:55Z ROLLBACK canary: smoke failed at weight 10
+2026-10-17T02:18:55Z canary.sh rolled back (exit 1)
+2026-10-17T02:18:55Z helm list -n sensor
+2026-10-17T02:18:55Z only stable release sensor remains
+2026-10-17T02:18:55Z smoke stable release sensor
+PASS ready 200
+PASS metrics contains service_up 1
+PASS GET /api/v1/service without cookie 401
+PASS login cookie dts_session
+PASS GET /api/v1/service with cookie 200
+PASS POST /api/v1/service/probe 200
+2026-10-17T02:18:55Z PASS canary-fail-demo: stable release sensor still serves traffic
+```
