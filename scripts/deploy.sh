@@ -60,8 +60,8 @@ fi
 "${helm_cmd[@]}"
 
 # Stable smoke must not inherit a canary pin from the caller.
-# "X-Canary: never" pins the stable smoke to stable pods while a canary ingress still exists:
-# sessions live in process memory, so mixing stable and canary pods would lose the cookie.
+# "X-Canary: never" pins the stable smoke to stable pods while a canary ingress exists,
+# so the release under test is really the stable one.
 if ! X_CANARY=never "${ROOT}/scripts/smoke.sh"; then
   printf 'smoke failed; helm rollback sensor 0 -n sensor --wait\n' >&2
   # Revision 0 means the previous revision. The first install has none.

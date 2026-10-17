@@ -137,7 +137,9 @@ if [[ -f "${enc_file}" ]]; then
     fi
   done
   if [[ "${mismatch}" -eq 1 ]]; then
-    echo "Ключ age этой машины не совпадает с получателем с ${enc_file}. Смена ключа — в deploy/secrets/README.md, раздел про ротацию age." >&2
+    echo "Ключ age этой машины не совпадает с получателем ${enc_file}." >&2
+    echo "Если это стенд проверки: rm ${enc_file} и запустить снова (будет новый пароль). Смена ключа — deploy/secrets/README.md." >&2
+    exit 1
   fi
   exit 0
 fi
@@ -186,6 +188,6 @@ mv "${plain}" "${enc_file}"
 chmod 644 "${enc_file}"
 
 echo "Зашифрован ${enc_file} (пароль ${password_source})."
-echo "DEMO_PASSWORD: ${password}"
+echo "Пароль входа в лог не пишется: его показывает make status (читает Secret sensor-secrets)."
 echo "Приватный ключ age: ${key_file}"
 echo "Этот ключ в git не класть."

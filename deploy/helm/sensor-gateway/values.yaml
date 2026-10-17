@@ -59,3 +59,13 @@ web:
     limits:
       cpu: 200m
       memory: 128Mi
+
+# API :8000 from this release's web pods and from namespace monitoring.
+# Web :80 from namespace ingress-nginx.
+networkPolicy:
+  enabled: true
+
+# maxUnavailable 1: with replicas 1, minAvailable 1 would block drains.
+pdb:
+  enabled: true
+  maxUnavailable: 1

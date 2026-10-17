@@ -1,0 +1,17 @@
+# Netplan (cloud-init network-config v2) для ВМ: DHCP на первом virtio-интерфейсе,
+# статический вариант — закомментирован. На OpenStack сеть обычно приходит из metadata,
+# тогда этот файл не передают.
+network:
+  version: 2
+  ethernets:
+    primary:
+      match:
+        name: "en*"
+      dhcp4: true
+      # dhcp4: false
+      # addresses: [192.168.122.50/24]
+      # routes:
+      #   - to: default
+      #     via: 192.168.122.1
+      # nameservers:
+      #   addresses: [1.1.1.1, 8.8.8.8]

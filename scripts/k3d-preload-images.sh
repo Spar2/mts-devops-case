@@ -20,6 +20,7 @@ images=(
   quay.io/prometheus/prometheus:v2.54.1
   registry.k8s.io/ingress-nginx/kube-webhook-certgen:v20221220-controller-v1.5.1-58-g787ea74b6
   registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+  docker.io/mendhak/http-https-echo:34
 )
 for image in "${images[@]}"; do
   docker image inspect "${image}" >/dev/null 2>&1 || docker pull -q "${image}"

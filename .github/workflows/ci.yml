@@ -87,6 +87,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+          version: v0.70.0
 
       - name: Scan sensor-web
         uses: aquasecurity/trivy-action@v0.36.0
@@ -95,6 +96,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+          version: v0.70.0
 
       - name: Log in to GHCR
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -113,6 +115,25 @@ jobs:
           docker push "${API_IMAGE}:latest"
           docker push "${WEB_IMAGE}:${SHA}"
           docker push "${WEB_IMAGE}:latest"
+
+      - name: SBOM (SPDX) for images
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: anchore/sbom-action@v0.17.8
+        with:
+          image: ${{ env.API_IMAGE }}:${{ steps.tag.outputs.sha }}
+          format: spdx-json
+          output-file: sbom-sensor-gateway.spdx.json
+          upload-artifact: true
+
+      - name: SBOM (SPDX) for web image
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: anchore/sbom-action@v0.17.8
+        with:
+          image: ${{ env.WEB_IMAGE }}:${{ steps.tag.outputs.sha }}
+          format: spdx-json
+          output-file: sbom-sensor-web.spdx.json
+          upload-artifact: true
+
 
   helm:
     runs-on: ubuntu-24.04

@@ -1,0 +1,62 @@
+# Webhook sink for Alertmanager. mendhak/http-https-echo:34 listens on 8080
+# as uid 1000 and logs each request, including the body, to stdout.
+# LOG_IGNORE_PATH in this tag is an exact path: probes use /, alerts use /alert.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-sink
+  namespace: monitoring
+  labels:
+    app: alert-sink
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alert-sink
+  template:
+    metadata:
+      labels:
+        app: alert-sink
+    spec:
+      containers:
+        - name: alert-sink
+          image: mendhak/http-https-echo:34
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: HTTP_PORT
+              value: "8080"
+            - name: LOG_IGNORE_PATH
+              value: /
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-sink
+  namespace: monitoring
+  labels:
+    app: alert-sink
+spec:
+  selector:
+    app: alert-sink
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

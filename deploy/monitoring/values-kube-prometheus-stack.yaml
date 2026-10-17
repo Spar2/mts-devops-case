@@ -1,6 +1,8 @@
 # kube-prometheus-stack 65.1.1 (Prometheus Operator v0.77.1, Grafana chart 8.5.*).
 # Release name: mon. Namespace: monitoring.
 # One small node (k3s or k3d). Install: scripts/monitoring-install.sh.
+# SensorGateway* goes to alert-sink (deploy/monitoring/alert-sink.yaml).
+# Watchdog and InfoInhibitor stay on receiver "null".
 #
 # etcd, kube-controller-manager, kube-scheduler and kube-proxy are not scraped:
 # k3s does not expose them as separate endpoints, and the matching default rules
@@ -48,6 +50,30 @@ alertmanager:
       limits:
         cpu: 100m
         memory: 128Mi
+  # Replaces chart route timings and the receivers list. inhibit_rules and
+  # group_by stay at the chart defaults. Receiver name "null" is a string.
+  config:
+    route:
+      receiver: "null"
+      group_wait: 10s
+      group_interval: 30s
+      repeat_interval: 1h
+      routes:
+        - receiver: "null"
+          matchers:
+            - 'alertname =~ "InfoInhibitor|Watchdog"'
+        - receiver: sensor-webhook
+          matchers:
+            - 'alertname =~ "SensorGateway.*"'
+          group_wait: 10s
+          group_interval: 30s
+          repeat_interval: 1h
+    receivers:
+      - name: "null"
+      - name: sensor-webhook
+        webhook_configs:
+          - url: "http://alert-sink.monitoring.svc:8080/alert"
+            send_resolved: true
 
 grafana:
   enabled: true
@@ -95,6 +121,9 @@ prometheus:
     # Empty selectors: load ServiceMonitors and PrometheusRules from every namespace,
     # including the sensor chart (namespace sensor) and release: mon rules.
     serviceMonitorSelectorNilUsesHelmValues: false
+    # Явно: искать ServiceMonitor и PrometheusRule во всех namespace (не только monitoring).
+    serviceMonitorNamespaceSelector: {}
+    ruleNamespaceSelector: {}
     ruleSelectorNilUsesHelmValues: false
     resources:
       requests:

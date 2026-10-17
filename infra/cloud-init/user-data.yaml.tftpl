@@ -71,7 +71,7 @@ runcmd:
       unset token
       echo "repository already present: $dest"
     fi
-    echo "make k8s-up as ubuntu"
-    sudo -u ubuntu -H bash -lc 'cd /home/ubuntu/mts-devops-case && make k8s-up'
+    echo "make up K3D=0 (native k3s) as ubuntu"
+    sudo -u ubuntu -H bash -lc 'cd /home/ubuntu/mts-devops-case && make up K3D=0'
     echo "=== mts-k8s-up done $(date -Is) ==="
     EOS

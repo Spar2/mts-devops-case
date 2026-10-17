@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install kube-prometheus-stack 65.1.1 and apply the sensor-gateway dashboard and alerts.
+# Install kube-prometheus-stack 65.1.1, the sensor-gateway dashboard and alerts,
+# and the alert-sink webhook Deployment. The namespace comes from Helm.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,3 +19,5 @@ helm upgrade --install mon prometheus-community/kube-prometheus-stack \
 
 kubectl apply -f "${root}/deploy/monitoring/dashboard-configmap.yaml"
 kubectl apply -f "${root}/deploy/monitoring/prometheusrule.yaml"
+kubectl apply -f "${root}/deploy/monitoring/alert-sink.yaml"
+kubectl -n monitoring rollout status deployment/alert-sink --timeout=180s

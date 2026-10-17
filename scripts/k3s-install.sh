@@ -35,8 +35,8 @@ run_root() {
 }
 
 install_helm() {
-  if command -v helm >/dev/null 2>&1; then
-    echo "helm present: $(helm version --short 2>/dev/null || helm version)"
+  if [[ "$(helm version --short 2>/dev/null)" == "${HELM_VERSION}"* ]]; then
+    echo "helm ${HELM_VERSION} present"
     return 0
   fi
   local arch tmp
@@ -51,7 +51,8 @@ install_helm() {
 }
 
 install_kubectl() {
-  if command -v kubectl >/dev/null 2>&1; then
+  if kubectl version --client 2>/dev/null | grep -q "Client Version: ${KUBECTL_VERSION}$"; then
+    echo "kubectl ${KUBECTL_VERSION} present"
     return 0
   fi
   local arch tmp
@@ -65,8 +66,8 @@ install_kubectl() {
 }
 
 install_k3d() {
-  if command -v k3d >/dev/null 2>&1; then
-    echo "k3d present: $(k3d version)"
+  if k3d version 2>/dev/null | grep -q "^k3d version ${K3D_VERSION}$"; then
+    echo "k3d ${K3D_VERSION} present"
     return 0
   fi
   local arch tmp
@@ -253,6 +254,40 @@ YAML
   return 1
 }
 
+# Проверки окружения до любых установок: понятная ошибка вместо падения на середине.
+check_prereqs() {
+  local missing=()
+  local cmd
+  for cmd in curl openssl sha256sum tar git; do
+    command -v "${cmd}" >/dev/null 2>&1 || missing+=("${cmd}")
+  done
+  if [[ "${K3D}" == "1" ]]; then
+    command -v docker >/dev/null 2>&1 || missing+=("docker")
+    if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
+      echo "docker установлен, но недоступен текущему пользователю: sudo usermod -aG docker \"${USER}\" и перелогиниться" >&2
+      exit 1
+    fi
+  fi
+  if ((${#missing[@]})); then
+    echo "Не хватает: ${missing[*]}. Установить: sudo apt-get install -y ${missing[*]/docker/docker.io}" >&2
+    exit 1
+  fi
+}
+
+# *.localtest.me публично резолвится в 127.0.0.1. Если DNS этого не делает (split DNS, офлайн),
+# добавляем строку в /etc/hosts, иначе smoke и ingress не заработают.
+ensure_hosts() {
+  local host
+  for host in sensor.localtest.me grafana.localtest.me; do
+    if [[ "$(getent ahostsv4 "${host}" | awk 'NR==1 {print $1}')" != "127.0.0.1" ]]; then
+      echo "${host} не резолвится в 127.0.0.1, добавляю в /etc/hosts"
+      echo "127.0.0.1 ${host}" | run_root tee -a /etc/hosts >/dev/null
+    fi
+  done
+}
+
+check_prereqs
+ensure_hosts
 install_helm
 if [[ "${K3D}" == "1" ]]; then
   install_k3d_cluster

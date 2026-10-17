@@ -1,6 +1,6 @@
 # ВМ libvirt для стенда sensor-gateway
 
-Одна виртуальная машина Ubuntu 24.04 в локальном libvirt (KVM). При первой загрузке cloud-init ставит пакеты, клонирует репозиторий и от пользователя `ubuntu` запускает `make k8s-up`. Лог гостя: `/var/log/mts-k8s-up.log`.
+Одна виртуальная машина Ubuntu 24.04 в локальном libvirt (KVM). При первой загрузке cloud-init ставит пакеты, клонирует репозиторий и от пользователя `ubuntu` запускает `make up K3D=0`. Лог гостя: `/var/log/mts-k8s-up.log`.
 
 Каталог `infra/ansible` — отдельный путь: плейбук для уже существующего хоста. Здесь создаётся сама ВМ.
 
@@ -30,7 +30,7 @@ URL образа — официальный поток release Ubuntu 24.04 (`re
 
 - Linux с KVM, libvirt и URI `qemu:///system`. Пользователь, который запускает Terraform, входит в группу `libvirt`.
 - Пул `default` и сеть `default` (NAT, dnsmasq). IP в `output` берётся из DHCP-аренды этой сети.
-- Свободная память сверх 8 ГиБ гостя. `make k8s-up` внутри ВМ рассчитан на 6–8 ГиБ.
+- Свободная память сверх 8 ГиБ гостя. `make up K3D=0` внутри ВМ рассчитан на 6–8 ГиБ.
 - Terraform `>= 1.6`. Ниже — установка 1.9.8 в `~/.local/bin` (linux amd64):
 
 ```bash
@@ -70,7 +70,7 @@ terraform output vm_ip
 
 `github_token` и `repo_url` без перевода строки. В URL нет одинарной кавычки: он подставляется в одинарные кавычки shell.
 
-`terraform apply` ждёт DHCP-аренду и после этого показывает IP. `make k8s-up` к этому моменту ещё выполняется в госте. Дальше:
+`terraform apply` ждёт DHCP-аренду и после этого показывает IP. `make up K3D=0` к этому моменту ещё выполняется в госте. Дальше:
 
 ```bash
 ssh ubuntu@$(cd infra/terraform && terraform output -raw vm_ip)
@@ -84,7 +84,7 @@ sudo tail -f /var/log/mts-k8s-up.log
 1. Пакеты `git`, `make`, `curl`, `docker.io`, `docker-compose-v2`.
 2. Группа `docker` создаётся до пользователя. `ubuntu` — default user облачного образа — входит в неё (`users` и повторный `usermod` в `runcmd`, уже после установки пакета).
 3. Клон `repo_url` в `/home/ubuntu/mts-devops-case` от `ubuntu`. Если токен задан, на время clone пишется `/home/ubuntu/.netrc` (`login x-access-token`), затем файл удаляется. В лог токен не попадает.
-4. `sudo -u ubuntu make k8s-up`. stdout и stderr команды — `/var/log/mts-k8s-up.log`.
+4. `sudo -u ubuntu make up K3D=0`. stdout и stderr команды — `/var/log/mts-k8s-up.log`.
 
 `runcmd` cloud-init записывает в config-стадии, а выполняет `scripts-user` в final-стадии, после установки пакетов.
 
@@ -102,3 +102,12 @@ cloud-init schema -c infra/cloud-init/user-data.example.yaml
 - `cloud-init schema` сверяет пример рендера со схемой cloud-config. В примере URL репозитория, плейсхолдер `__GITHUB_TOKEN__` и строка-заглушка SSH-ключа. Это вход для схемы, не секрет и не ключ доступа. На хосте без datasource cloud-init пишет предупреждение и при успехе печатает `Valid schema`.
 
 Рендер с пустым токеном и пустым ключом тоже проходит схему. В git лежит вариант с плейсхолдерами.
+
+## Сеть (netplan) и OpenStack
+
+- `infra/cloud-init/network-config.yaml` — netplan (network-config v2): DHCP на `en*`, рядом закомментирован
+  статический вариант. Terraform передаёт его в cloud-init диск. Проверка: `cloud-init schema --schema-type network-config -c infra/cloud-init/network-config.yaml`.
+- Целевой стек кейса — OpenStack + Kubernetes. Тот же `user-data` подходит для OpenStack Nova без изменений
+  (`openstack server create --image ubuntu-24.04 --flavor <8GB> --user-data user-data.yaml …`): сеть инстанс получает
+  из metadata Neutron, поэтому `network-config.yaml` там не нужен. Доступа к OpenStack-облаку у команды не было,
+  поэтому этот путь не запускался; проверен локальный эквивалент — `make up K3D=0` на Ubuntu 24.04 в GitHub Actions (job e2e).

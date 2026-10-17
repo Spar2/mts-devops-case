@@ -40,11 +40,15 @@ spec:
           image: "{{ .Values.image.api.repository }}:{{ .Values.image.api.tag }}"
           imagePullPolicy: {{ include "sensor-gateway.pullPolicy" (list .Values.image.api.tag .Values.image.pullPolicy) }}
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
+            seccompProfile:
+              type: RuntimeDefault
           ports:
             - name: http
               containerPort: 8000

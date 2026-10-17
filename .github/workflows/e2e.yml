@@ -1,0 +1,85 @@
+name: e2e
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: e2e (${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Путь жюри по умолчанию: k3d (k3s в Docker), ingress на :8081.
+          - mode: k3d
+            k3d: "1"
+            ingress_port: "8081"
+            kubeconfig: /home/runner/.kube/config
+          # Нативный k3s на хосте Ubuntu 24.04 (как на ВМ / OpenStack-инстансе), ingress на :80.
+          - mode: k3s
+            k3d: "0"
+            ingress_port: "80"
+            kubeconfig: /etc/rancher/k3s/k3s.yaml
+    env:
+      K3D: ${{ matrix.k3d }}
+      INGRESS_PORT: ${{ matrix.ingress_port }}
+      KUBECONFIG: ${{ matrix.kubeconfig }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Public DNS already maps sensor.localtest.me to 127.0.0.1. This hosts
+      # line is a safety net (and adds grafana.localtest.me) if runner DNS does not.
+      - name: Map localtest.me to loopback
+        run: echo "127.0.0.1 sensor.localtest.me grafana.localtest.me" | sudo tee -a /etc/hosts
+
+      # Jury path. scripts/k3s-install.sh (invoked by make up) installs pinned
+      # Helm, kubectl, and k3d with sudo. Hosted runners have passwordless sudo and Docker.
+      - name: make up
+        run: make up
+
+      - name: make k8s-netpol-check
+        run: make k8s-netpol-check
+
+      - name: make k8s-canary-fail
+        run: make k8s-canary-fail
+
+      - name: make k8s-rollback-demo
+        run: make k8s-rollback-demo
+
+      - name: make k8s-rotate-demo
+        run: make k8s-rotate-demo
+
+      - name: make k8s-alert-demo
+        run: make k8s-alert-demo
+
+      - name: make k8s-canary
+        env:
+          ANALYSIS_WAIT_S: "75"
+        run: make k8s-canary
+
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          kubectl get pods -A
+          helm list -A
+          kubectl -n sensor describe pods | tail -n 100
+          kubectl -n monitoring get pods
+
+      - name: make down
+        if: always()
+        run: make down

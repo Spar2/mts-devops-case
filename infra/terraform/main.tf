@@ -29,6 +29,7 @@ resource "libvirt_cloudinit_disk" "sensor" {
     github_token   = var.github_token
     ssh_public_key = var.ssh_public_key
   })
+  network_config = file("${path.module}/../cloud-init/network-config.yaml")
   meta_data = yamlencode({
     "instance-id"    = "mts-sensor"
     "local-hostname" = "mts-sensor"

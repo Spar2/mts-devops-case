@@ -1,17 +1,21 @@
 # Облачный DevOps-конвейер: от репозитория до production-Kubernetes за 3 команды
 
+## Название кейса
+
+Кейс 1 хакатона МТС «Облачный DevOps-конвейер: от репозитория до production-Kubernetes за 3 команды».
+
 Кейс 1 хакатона МТС. Демо-служба `sensor-gateway` (FastAPI) и веб-интерфейс из трёх окон проходят путь:
 push в `main` → линт, тесты, проверки манифестов, сборка, Trivy → образы в GHCR → Helm-релиз в k3s с canary
 через ingress-nginx и автоматическим откатом по smoke и метрикам → дашборд и алерт в Prometheus/Grafana/Alertmanager.
 
-## Проблема
+## Описание проблемы
 
 Проверяющему нужно у себя на Ubuntu короткой командой поднять сервис и увидеть весь конвейер: сборку образа,
 выкладку, откат неудачного релиза, секреты вне git и наблюдаемость. Полный продукт для этого слишком большой,
 поэтому в репозитории одна служба и три окна (`/`, `/login`, `/service`). Расчёты, очереди, БД и остальной
 контур платформы сюда сознательно не входят.
 
-## Цель
+## Цель работы
 
 Воспроизводимый конвейер из открытых инструментов с зафиксированными версиями, где каждое требование кейса
 можно проверить командой и где есть лог реальной проверки.
@@ -35,17 +39,17 @@ push в `main` → линт, тесты, проверки манифестов, 
 | Мониторинг: алерт | `deploy/monitoring/prometheusrule.yaml` | `kubectl -n sensor scale deploy sensor-api --replicas=0` | Проверено: `SensorGatewayDown` firing в Prometheus и в Alertmanager (`docs/monitoring-alert-proof.md`, скриншоты) |
 | Видео ≤ 5 мин | `docs/demo-script.md` | — | Сценарий готов, ролик снимает команда |
 
-## Команда
+## Состав команды (роли, опыт и навыки)
 
-| Роль | Что делает в этом репозитории |
-| --- | --- |
-| Веб | Три окна: лендинг, вход, служба |
-| DevOps | Конвейер, образы, кластер, секреты: CI, Helm-чарт, k3s, canary, SOPS |
-| SRE | Метрики, дашборд, алерт: kube-prometheus-stack, ServiceMonitor, PrometheusRule |
+| Роль | Зона ответственности в репозитории | Навыки, которые применены в решении |
+| --- | --- | --- |
+| Веб | Три окна: лендинг, вход, служба (`apps/web`) | React 19, Vite 8, nginx |
+| DevOps | CI, образы, Helm-чарт, k3s/k3d, canary, SOPS, IaC (`.github/`, `deploy/`, `scripts/`, `infra/`) | GitHub Actions, Docker/BuildKit, Trivy, Helm, Kubernetes, ingress-nginx, SOPS/age, Ansible, Terraform, cloud-init |
+| SRE | Метрики, дашборд, алерт, доставка алерта (`deploy/monitoring/`) | Prometheus/PromQL, Grafana, Alertmanager, kube-prometheus-stack |
 
-Имена, опыт и навыки участников команда дописывает перед сдачей. Выдуманных биографий здесь нет.
+Имена и личный опыт участников команда указывает сама при сдаче; выдуманных биографий в репозитории нет.
 
-## Архитектура
+## Архитектура/схема
 
 ```mermaid
 flowchart LR
@@ -80,7 +84,7 @@ flowchart LR
 - Сессия — подписанная cookie `dts_session` (HMAC-SHA256, `HttpOnly`, `SameSite=Strict`). Ключ выводится из
   `SESSION_SECRET` и `DEMO_PASSWORD`, поэтому stable и canary принимают одну cookie, а ротация пароля отзывает все сессии.
 
-## Инструменты
+## Использованные инструменты с версиями
 
 | Инструмент | Версия |
 | --- | --- |
@@ -109,9 +113,11 @@ flowchart LR
 | `make k8s-up` (k3s + мониторинг) | 8 ГБ рекомендуемо (стек занимает около 3 ГБ, лимит Prometheus 1 ГиБ), 16 ГБ с запасом | 2–4 vCPU | ~10 ГБ |
 | ВМ из `infra/terraform` | 8 ГиБ по умолчанию (`vm_memory_mib`) | 4 vCPU | 30 ГиБ |
 
-## Как запустить
+## Как запустить (git clone …; make up)
 
-Проверяющие работают в Ubuntu. Нужны Git, Docker с Compose V2 и `make`; для `make k8s-up` ещё `sudo` и `curl`.
+Нужно: Ubuntu 22.04/24.04, Git, `make`, Docker (пользователь в группе `docker`), `curl`, `openssl`, `sudo`
+(только чтобы положить pinned helm/kubectl/k3d в `/usr/local/bin` и при необходимости дописать `/etc/hosts`).
+Ресурсы: 8 ГБ RAM, 2–4 vCPU, ~10 ГБ диска. Порт `8081` на хосте должен быть свободен.
 
 Репозиторий приватный: жюри клонирует его под GitHub-аккаунтом, которому выдан доступ (HTTPS с токеном или SSH-ключ).
 
@@ -121,31 +127,43 @@ cd mts-devops-case
 make up
 ```
 
-Открыть http://127.0.0.1:8080, логин `demo`, пароль `demo-stand-pass` (из `.env.example`, пароль локального стенда).
-Остановить: `make down`.
+`make up` поднимает **полное решение** (~5 минут на чистой машине):
 
-**Почему `make up` — Compose.** Эксперты допустили Compose. Установка Prometheus в кластер занимает минуты, а три команды
-должны давать работающий стенд быстро и предсказуемо. Полный Kubernetes-контур — отдельной целью:
+1. `scripts/k3s-install.sh` — проверяет зависимости, ставит pinned helm v3.16.3 / kubectl v1.31.4 / k3d v5.8.3, создаёт
+   k3d-кластер `mts` (k3s v1.31.4 в Docker), ставит ingress-nginx 4.11.3 и ждёт готовности его admission webhook;
+2. `scripts/secrets-init.sh` + `secrets-apply.sh` — ставит sops/age, генерирует ключ age этой машины и зашифрованный Secret;
+3. `scripts/monitoring-install.sh` — kube-prometheus-stack 65.1.1, дашборд, правила алертов, приёмник алертов `alert-sink`;
+4. сборка образов из исходников и `k3d image import` — **доступ к приватному GHCR не нужен**;
+5. `scripts/deploy.sh` — Helm-релиз `sensor` (`--atomic`) и smoke-проверка; при провале — `helm rollback`;
+6. `make status` — печатает адреса и пароль входа.
+
+Результат:
+
+- приложение: http://sensor.localtest.me:8081 — логин `demo`, пароль печатает `make status`;
+- Grafana: http://grafana.localtest.me:8081 — admin/admin (демо-доступ), дашборд `sensor-gateway`.
+
+`*.localtest.me` публично резолвится в 127.0.0.1; если DNS этого не делает, скрипт сам дописывает `/etc/hosts`.
+
+Демонстрации на поднятом стенде (каждая — одна команда, все прогоняются в GitHub Actions, job `e2e`):
 
 ```bash
-make k8s-up            # k3s + ingress-nginx (ждёт admission webhook) + SOPS-секрет + kube-prometheus-stack + Helm-релиз + smoke
-make k8s-canary        # canary 10 → 50 → 100 с smoke и PromQL-гейтом на каждом шаге, затем promote
-./scripts/canary-fail-demo.sh <tag>   # заведомо неверный секрет у canary → автоматический откат, stable не задет
-make k8s-rollback-demo # битый тег образа → helm --atomic откатывает релиз, печатается helm history
-INGRESS_PORT=80 ./scripts/secrets-rotate-check.sh   # ротация пароля end-to-end
-make k8s-down
+make k8s-canary          # canary 10 → 50 → 100: smoke + PromQL-гейт на каждом шаге, затем promote
+make k8s-canary-fail     # canary с неверным секретом → автоматический откат, stable не задет
+make k8s-rollback-demo   # битый тег образа → helm --atomic откатывает релиз, печатается helm history
+make k8s-rotate-demo     # ротация пароля: старый пароль и старая cookie → 401, новый → 200
+make k8s-alert-demo      # API выключается → SensorGatewayDown firing → Alertmanager → webhook alert-sink → API обратно
+make down                # удалить кластер (и Compose-демо, если запущено)
 ```
 
-- Приложение: http://sensor.localtest.me (имя резолвится в 127.0.0.1). Пароль печатает `scripts/secrets-init.sh`
-  при первом запуске, он же лежит в Secret `sensor-secrets`.
-- Grafana: http://grafana.localtest.me (демо-доступ admin/admin — поменять перед публикацией).
-- Prometheus и Alertmanager: `kubectl -n monitoring port-forward svc/mon-kube-prometheus-stack-prometheus 9090:9090`
-  и `svc/mon-kube-prometheus-stack-alertmanager 9093:9093`.
-- `make k8s-up` собирает образы локально и импортирует их в containerd k3s: доступ к приватным пакетам GHCR не нужен.
-  Образы из CI: `make k8s-deploy TAG=<sha>` при настроенном imagePullSecret.
-- Без sudo, в Docker: `make k8s-up K3D=1` (кластер k3d `mts`, ingress на `:8081`).
-- Ansible: `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` — обёртка над `make k8s-up`.
-- ВМ: `infra/README.md` (Terraform + cloud-init, внутри ВМ выполняется `make k8s-up`).
+Другие режимы:
+
+- `make demo` — лёгкое демо без Kubernetes (Docker Compose, http://127.0.0.1:8080, пароль из `.env.example`), до 2 ГБ RAM.
+- `make up K3D=0` — нативный k3s на хосте (ВМ, OpenStack-инстанс), ingress на `:80`. Проверено в GitHub Actions на Ubuntu 24.04.
+- `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` — плейбук-обёртка над `make k8s-up`
+  (локальный, `connection: local`; логика не дублируется).
+- ВМ: `infra/README.md` — Terraform (libvirt) + cloud-init + netplan, внутри ВМ выполняется `make up K3D=0`.
+- Образы из GHCR (их пушит CI из `main`): пакеты приватные, как и репозиторий; для кластера нужен
+  `imagePullSecrets` (значение чарта) с токеном `read:packages`, затем `make k8s-deploy TAG=<sha>`. Путь жюри от GHCR не зависит.
 
 ### Как работает CD
 
@@ -158,7 +176,22 @@ make k8s-down
   Успех → promote в stable через `deploy.sh`, удаление canary.
 - Stable smoke во время canary шлёт `X-Canary: never`, чтобы проверять именно stable.
 
-## Мониторинг
+### Видео
+
+Требования: до 5 минут, показать работающий стенд, а не установку с нуля; склейка и монтаж допустимы; сгенерированные кадры
+не использовать. Пошаговый сценарий с таймингом — `docs/demo-script.md`. Ролик снимает команда.
+
+### Что не проверено и ограничения
+
+- **Нативный k3s на Ubuntu** (`make k8s-up` без `K3D=1`) на box не запускался: в песочнице нет systemd и vxlan.
+  Тот же скрипт и те же чарты проверены в k3d с образом k3s v1.31.4. Для песочницы понадобились параметры
+  `K3D_PRELOAD=1` (из подов нет egress), `INGRESS_SERVICE_TYPE=NodePort` (не работает hostPort) и host-gw вместо vxlan —
+  на обычной Ubuntu они не нужны.
+- **`terraform apply`** на box не доведён: вложенная ВМ на 6 ГБ исчерпала память песочницы. Проверены `terraform validate`
+  и `cloud-init schema`; внутри ВМ выполняется тот же `make k8s-up`, что проверен выше.
+- Доставка алертов во внешний канал не настраивалась (receiver `null`).
+
+## Мониторинг и наблюдаемость
 
 - Сервис отдаёт `/health`, `/ready`, `/metrics` (`service_up`, `http_requests_total`, `service_probe_latency_seconds`).
 - ServiceMonitor из чарта (label `release: mon`) подключает `/metrics` stable и canary к Prometheus.
@@ -205,21 +238,6 @@ make k8s-down
   CI и логами в `docs/`.
 - **Понимание кода командой:** каждый сгенерированный файл прошёл ревью; что делает каждый скрипт, описано в README и
   в шапках скриптов; исправления выше сделаны вручную после разбора причин.
-
-## Видео
-
-Требования: до 5 минут, показать работающий стенд, а не установку с нуля; склейка и монтаж допустимы; сгенерированные кадры
-не использовать. Пошаговый сценарий с таймингом — `docs/demo-script.md`. Ролик снимает команда.
-
-## Что не проверено и ограничения
-
-- **Нативный k3s на Ubuntu** (`make k8s-up` без `K3D=1`) на box не запускался: в песочнице нет systemd и vxlan.
-  Тот же скрипт и те же чарты проверены в k3d с образом k3s v1.31.4. Для песочницы понадобились параметры
-  `K3D_PRELOAD=1` (из подов нет egress), `INGRESS_SERVICE_TYPE=NodePort` (не работает hostPort) и host-gw вместо vxlan —
-  на обычной Ubuntu они не нужны.
-- **`terraform apply`** на box не доведён: вложенная ВМ на 6 ГБ исчерпала память песочницы. Проверены `terraform validate`
-  и `cloud-init schema`; внутри ВМ выполняется тот же `make k8s-up`, что проверен выше.
-- Доставка алертов во внешний канал не настраивалась (receiver `null`).
 
 ## Troubleshooting
 

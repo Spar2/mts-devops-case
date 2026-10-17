@@ -31,11 +31,27 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      # nginx in this image binds port 80 and stays root. Do not set runAsNonRoot.
+      # nginx:1.29-alpine master stays root: it binds port 80 and setuid's workers.
+      # Do not set runAsNonRoot. /var/run is a symlink to /run (pid /run/nginx.pid);
+      # the emptyDir is mounted on that target.
       containers:
         - name: web
           image: "{{ .Values.image.web.repository }}:{{ .Values.image.web.tag }}"
           imagePullPolicy: {{ include "sensor-gateway.pullPolicy" (list .Values.image.web.tag .Values.image.pullPolicy) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+                - SETUID
+                - SETGID
+                - NET_BIND_SERVICE
+                - DAC_OVERRIDE
+            seccompProfile:
+              type: RuntimeDefault
           ports:
             - name: http
               containerPort: 80
@@ -45,9 +61,15 @@ spec:
               mountPath: /etc/nginx/conf.d/default.conf
               subPath: default.conf
               readOnly: true
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+          # Пробы web проверяют сам nginx (статический /), а не API за ним:
+          # иначе падение API перезапускало бы и web.
           readinessProbe:
             httpGet:
-              path: /ready
+              path: /
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10
@@ -55,7 +77,7 @@ spec:
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /health
+              path: /
               port: http
             initialDelaySeconds: 10
             periodSeconds: 20
@@ -70,3 +92,7 @@ spec:
             items:
               - key: default.conf
                 path: default.conf
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
