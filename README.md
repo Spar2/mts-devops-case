@@ -45,6 +45,7 @@
 | Сеть ВМ (netplan) | `infra/cloud-init/network-config.yaml` → `libvirt_cloudinit_disk.network_config` | `cloud-init schema` | Схема валидна; ВМ не поднималась |
 | Безопасность подов | securityContext, NetworkPolicy, PDB в чарте | `make k8s-netpol-check` | NetworkPolicy проверена в e2e на GitHub (чужой namespace → BLOCKED, web → API → REACHED) |
 | Доставка алерта | Alertmanager → webhook `alert-sink` | `make k8s-alert-demo` | Проверено: firing → webhook → resolved (e2e и box) |
+| LLM: генерация конфигов с фиксацией промтов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Проверено на box: 3 правила, 2 приняты валидатором, 1 отвергнут promtool; job `llm` в CI |
 | Видео ≤ 5 мин | `docs/demo-script.md` | — | Сценарий готов, ролик снимает команда |
 
 ## Состав команды (роли, опыт и навыки)
@@ -113,6 +114,7 @@ flowchart LR
 | Ansible | ansible-core 2.17 (проверено 2.17.5) |
 | Terraform / провайдер | 1.9.8 / dmacvicar/libvirt 0.8.3 (`~> 0.8.1`) |
 | cloud-init | схема проверена cloud-init 25.1 |
+| Локальная LLM (опц.) | llama.cpp server `b11681`, модель Ternary-Bonsai-2-4B Q2_0 (Apache-2.0), promtool из `prom/prometheus:v2.54.1` |
 | GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0` (Trivy v0.70.0), `anchore/sbom-action@v0.17.8`, kubeconform 0.6.7, `hadolint/hadolint-action@v3.1.0`, shellcheck (из образа раннера) |
 | Приёмник алертов | `mendhak/http-https-echo:34` |
 
@@ -124,6 +126,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | `make demo` (Compose) | до 2 ГБ | 1–2 vCPU | ~1 ГБ образов |
 | `make up` (k3s + мониторинг) | 8 ГБ достаточно (весь стек около 3 ГБ), 16 ГБ с запасом | 2–4 vCPU | ~10 ГБ |
+| `make llm-up` (опц.) | пик RSS 1.66 ГБ (2B-вариант ~0.7 ГБ) | 4–6 vCPU с AVX2 | 1.2 ГБ весов + 0.1 ГБ образ |
 | ВМ из `infra/terraform` | 8 ГиБ по умолчанию (`vm_memory_mib`) | 4 vCPU | 30 ГиБ |
 
 Лимиты: API — requests 50m/128Mi, limits 500m/256Mi; web — 25m/64Mi и 200m/128Mi (`values.yaml`). У компонентов kube-prometheus-stack
@@ -269,7 +272,8 @@ make down                # удалить кластер (и Compose-демо, �
 
 ## Использование LLM
 
-В работе службы языковой модели нет. LLM использовалась только при разработке.
+В работе службы sensor-gateway языковой модели нет. LLM используется (1) при разработке — внешний Grok CLI, ниже;
+(2) в конвейере как опциональный локальный помощник SRE — раздел «Локальная LLM в конвейере».
 
 - **Инструмент:** Grok CLI v1.0.52, модель `grok-4.7-build-fast`. Две волны параллельных сессий (5 + 4), у каждой свои
   каталоги, git-команды сессиям запрещены. Ревью, интеграция, прогоны в k3d и коммиты — человек.
@@ -285,6 +289,58 @@ make down                # удалить кластер (и Compose-демо, �
   CI и логами в `docs/`.
 - **Понимание кода командой:** каждый сгенерированный файл прошёл ревью; что делает каждый скрипт, описано в README и
   в шапках скриптов; исправления выше сделаны вручную после разбора причин.
+
+### Локальная LLM в конвейере (опционально)
+
+Модель не заменяет ни службу, ни проверки: она пишет черновик PrometheusRule по одной фразе и объясняет провал canary,
+а каждый результат проходит автоматическую проверку и ревью человека. `make up` / `make k8s-up` от неё не зависят.
+
+- **Модель:** [prism-ml/Ternary-Bonsai-2-4B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf),
+  файл `Ternary-Bonsai-2-4B-Q2_0.gguf` (тернарные веса), **1.21 ГБ**, лицензия **Apache-2.0**, без gated-доступа и токена.
+  sha256 `64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4` (проверяется скриптом).
+- **Почему она:** из 7 замеренных моделей (Bonsai 1.7B/4B/8B 1-бит, Ternary-Bonsai-2 2B/4B, Qwen2.5-Coder 0.5B/1.5B)
+  единственная дала 3/3 правила, прошедших YAML + promtool с первой попытки, и объяснение отката без фактических ошибок.
+  Таблица замеров — `docs/llm/model-choice.md`.
+- **Рантайм:** официальный `ghcr.io/ggml-org/llama.cpp:server-b11681` (upstream, форк PrismML не нужен), OpenAI-совместимый
+  API на `127.0.0.1:8090`, только CPU (AVX2), лимит контейнера 2 ГБ.
+- **Ресурсы:** пиковый RSS 1.66 ГБ (0.47 ГБ анонимной + 1.19 ГБ отображённых весов), 14.5 ток/с генерации на 6 потоках;
+  правило 16–26 с, объяснение ~50 с. Для 8 ГБ машин: `LLM_NAME=ternary-bonsai-2-2b` (0.55 ГБ, ~0.7 ГиБ, 38 ток/с, слабее).
+
+```bash
+make llm-up                       # скачать веса с HF (sha256) в llm/models/ и запустить llama-server
+make llm-gen DESC="Critical when process_resident_memory_bytes is above 400MB for 10m"
+make llm-explain                  # объяснить провал canary по llm/examples/canary-fail.log (или LOG=файл)
+make llm-notes RANGE=HEAD~3..HEAD # черновик release notes из git log/diffstat
+make llm-test                     # тесты валидатора без модели (они же в CI, job llm)
+make llm-down
+```
+
+Что проверяется в `llm-gen` (`llm/llm_gen.py`): YAML; `apiVersion/kind`; DNS-1123 имя; `release: mon` (иначе
+kube-prometheus-stack не подхватит); CamelCase имя алерта; `for`; `severity` warning|critical; summary/description;
+`promtool check rules` (образ `prom/prometheus:v2.54.1`); `rate()`/`increase()` по gauge и regex в `=`-матчере.
+При ошибке — один раунд: ошибки валидатора уходят модели, результат проверяется снова; если не прошёл — код выхода 1.
+В `llm-explain` — проверка на выдуманные числа: каждое число из ответа (HTTP-коды, веса) должно быть в логе.
+Каждый запуск пишет в `llm/out/runs.jsonl`: модель, seed 42, temperature 0, файл промпта, запрос, время, токены,
+результат валидации. Промпты — `llm/prompts/*.txt`.
+
+Реальный вывод (`make llm-gen`, 15.7 с, 145 токенов, `VALIDATION OK`):
+
+```yaml
+        - alert: SensorGatewayMemoryCritical
+          expr: process_resident_memory_bytes > 400000000
+          for: 10m
+          labels:
+            severity: critical
+```
+
+Полные примеры и журнал прогонов: `docs/llm/examples/`. Тот же прогон показал и ошибку модели: для задержки она
+написала `sum(service_probe_latency_seconds{...}[2m])` — promtool отверг, исправление тоже не прошло, `make llm-gen`
+завершился с кодом 1 и правило не попало дальше.
+
+Без ключа и без интернета: после `make llm-up` (единственный выход в сеть — скачивание весов и образов) всё работает
+офлайн, ключи не нужны. **Риски:** малая модель ошибается в смысле PromQL (валидные, но не те выражения) — поэтому
+правило — черновик для ревью, а не автодеплой; объяснение пишется по-английски вопреки промпту и может перепутать
+детали — это подсказка, откат от неё не зависит; генерация занимает до минуты.
 
 ## Troubleshooting
 

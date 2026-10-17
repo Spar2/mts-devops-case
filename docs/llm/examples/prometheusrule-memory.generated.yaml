@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: sensor-gateway-memory-critical
+  namespace: monitoring
+  labels:
+    release: mon
+spec:
+  groups:
+    - name: sensor-gateway-generated
+      rules:
+        - alert: SensorGatewayMemoryCritical
+          expr: process_resident_memory_bytes > 400000000
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Process memory exceeds limit"
+            description: "process_resident_memory_bytes is above 400MB for 10 minutes."

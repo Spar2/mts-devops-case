@@ -1,0 +1,8 @@
+# name	url	sha256	bytes
+ternary-bonsai-2-4b	https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf/resolve/main/Ternary-Bonsai-2-4B-Q2_0.gguf	64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4	1212103520
+ternary-bonsai-2-2b	https://huggingface.co/prism-ml/Ternary-Bonsai-2-2B-gguf/resolve/main/Ternary-Bonsai-2-2B-Q2_0.gguf	c2893fa6f951daee8b7263d5f49b455e57989ef56417a22125b03566dc560650	546689504
+bonsai-4b	https://huggingface.co/prism-ml/Bonsai-4B-gguf/resolve/main/Bonsai-4B-Q1_0.gguf	4524b3f997f0f06444e568d1f26e2efd69effa3218c7ad3047432fb171e42168	572270624
+bonsai-8b	https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B-Q1_0.gguf	284a335aa3fb2ced3b1b01fcb40b08aa783e3b70832767f0dd2e3fdfa134bd54	1158654496
+bonsai-1.7b	https://huggingface.co/prism-ml/Bonsai-1.7B-gguf/resolve/main/Bonsai-1.7B-Q1_0.gguf	3d7c6c90dd98717a203adb22d5eacd2581850e40aa5327e144b97766cae5f7e3	248302272
+qwen-coder-1.5b	https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf	cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046	1117320768
+qwen-coder-0.5b	https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf	1d9614638d18024d0fbb36575a15f1302a3adf044df10345688ec4f6e1c4ff32	491400064

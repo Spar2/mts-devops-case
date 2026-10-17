@@ -113,3 +113,36 @@ k8s-down:
 	-helm uninstall mon -n monitoring
 	@echo "k3s целиком удаляется: sudo /usr/local/bin/k3s-uninstall.sh"
 endif
+
+# --- Локальная LLM (опционально, make up / make k8s-up от неё не зависят), см. README «Использование LLM» ---
+.PHONY: llm-fetch llm-up llm-down llm-gen llm-explain llm-notes llm-test
+LLM_NAME ?= ternary-bonsai-2-4b
+export LLM_NAME
+LLM_PY ?= python3
+DESC ?= Critical alert when service_probe_latency_seconds is above 1 second for 2 minutes
+
+llm-fetch:
+	./scripts/llm-fetch.sh $(LLM_NAME)
+
+llm-up: llm-fetch
+	./scripts/llm-up.sh
+
+llm-down:
+	docker rm -f mts-llm
+
+# Описание → PrometheusRule → проверка (YAML, структура, release=mon, promtool check rules); при ошибке один раунд исправления.
+llm-gen:
+	LLM_MODEL=$(LLM_NAME) $(LLM_PY) llm/llm_gen.py rule "$(DESC)"
+
+# Объяснение провала canary/отката по логу (по умолчанию пример из docs/cd-demo-log.md) с проверкой на выдуманные числа.
+LOG ?= llm/examples/canary-fail.log
+llm-explain:
+	LLM_MODEL=$(LLM_NAME) $(LLM_PY) llm/llm_gen.py explain $(LOG)
+
+RANGE ?= HEAD~5..HEAD
+llm-notes:
+	LLM_MODEL=$(LLM_NAME) $(LLM_PY) llm/llm_gen.py notes --range $(RANGE)
+
+# Тесты валидатора и цикла исправления без модели (фейковый OpenAI-сервер).
+llm-test:
+	$(LLM_PY) -m pytest -q llm

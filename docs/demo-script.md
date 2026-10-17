@@ -17,3 +17,6 @@
 | 4:40–5:00 | NetworkPolicy | `make k8s-netpol-check` (на обычной Ubuntu; в песочнице без ipset не работает) |
 
 Пароль Grafana печатает `make status`.
+Подсказки: Grafana — http://grafana.localtest.me (admin/admin в демо), Prometheus — `kubectl -n monitoring port-forward svc/mon-kube-prometheus-stack-prometheus 9090:9090`.
+
+**LLM (~20 с, вставка за счёт склейки ожидания алерта в 3:40–4:40):** заранее `make llm-up`; в кадре `make llm-gen DESC="Critical when process_resident_memory_bytes is above 400MB for 10m"` — YAML от локальной Ternary-Bonsai-2-4B, строки `promtool check rules — SUCCESS` и `VALIDATION OK`, затем `tail -1 llm/out/runs.jsonl` (модель, seed, промпт, время). Ожидание генерации (~16 с) склеить. Сказать: модель пишет черновик, принимает его валидатор и человек.

@@ -169,3 +169,17 @@ TASK E (live CD proof in GitHub Actions). Create .github/workflows/e2e.yml: name
 переведён на метрики ingress-nginx, а недоступный Prometheus теперь откатывает canary (раньше `pgrep -f` находил сам себя,
 port-forward не поднимался и гейт молча пропускался); ожидание появления target canary в Prometheus; пароль Grafana в SOPS;
 kubeconfig 600; алерты NoReplicas/PodRestarts вместо бесполезного SlowProbe; resolved в alert-demo; откат первой установки через uninstall.
+## Локальная LLM в конвейере (2026-10-17)
+
+Код `llm/llm_gen.py`, `scripts/llm-*.sh`, `llm/test_llm_gen.py` и цели Makefile написаны вручную в сессии исполнителя
+(Grok Bot) без Grok CLI. Промпты самой локальной модели (Ternary-Bonsai-2-4B) лежат дословно в файлах и логируются
+в каждом запуске (`llm/out/runs.jsonl`, поле `prompt_file` + `user`):
+
+- `llm/prompts/prometheusrule.system.txt` — описание → PrometheusRule (с примером-образцом);
+- `llm/prompts/rollback-explain.system.txt` — объяснение провала canary по логу;
+- `llm/prompts/release-notes.system.txt` — черновик release notes из git log/diffstat.
+
+Сообщение пользователя для правила: `Available metrics: <список метрик службы>.\nTask: <DESC>`. Сообщение
+исправления: `Validation failed:\n- <ошибки валидатора>\nReturn the corrected full YAML only.`
+Экономия времени: черновик правила с проверкой ~16–26 с против ~5–10 мин ручного написания и прогона promtool
+(оценка, хронометраж ручного варианта не вёлся).

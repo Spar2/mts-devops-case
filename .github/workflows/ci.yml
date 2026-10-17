@@ -220,3 +220,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Shellcheck
         run: shellcheck scripts/*.sh
+
+  llm:
+    # Валидатор LLM-вывода и цикл исправления без модели (фейковый OpenAI-сервер) + promtool на эталонном правиле.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pyyaml==6.0.2 pytest==8.3.4 ruff==0.8.4
+      - run: ruff check llm
+      - run: python -m pytest -q llm
+      - name: Validator + promtool (Docker) on deploy/monitoring/prometheusrule.yaml
+        run: python llm/llm_gen.py validate-rule deploy/monitoring/prometheusrule.yaml

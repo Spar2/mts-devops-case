@@ -12,3 +12,5 @@ __pycache__/
 .terraform.lock.hcl.bak
 deploy/secrets/sops.local.yaml
 *.enc.yaml
+llm/models/
+llm/out/

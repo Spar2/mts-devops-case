@@ -1,0 +1,35 @@
+2026-10-16T22:56:54Z using tag s2
+2026-10-16T22:56:54Z creating Secret sensor-secrets-wrong in namespace sensor
+namespace/sensor configured
+secret/sensor-secrets-wrong created
+2026-10-16T22:56:54Z running canary.sh; smoke login should fail and roll the canary back
+2026-10-16T22:56:54Z canary s2 weights: 10 50 100
+2026-10-16T22:56:54Z CANARY_HELM_ARGS: --set existingSecret=sensor-secrets-wrong
+2026-10-16T22:56:54Z installing sensor-canary tag s2 weight 10
+Release "sensor-canary" does not exist. Installing it now.
+2026-10-16T22:57:16Z smoke X-Canary: always at weight 10
+PASS ready 200
+PASS metrics contains service_up 1
+PASS GET /api/v1/service without cookie 401
+FAIL login: HTTP 401, expected 200 and cookie dts_session
+FAIL GET /api/v1/service with cookie: no session
+FAIL POST /api/v1/service/probe: no session
+2026-10-16T22:57:16Z setting canary weight 0
+Release "sensor-canary" has been upgraded. Happy Helming!
+2026-10-16T22:57:17Z helm uninstall sensor-canary
+release "sensor-canary" uninstalled
+2026-10-16T22:57:17Z ROLLBACK canary: smoke failed at weight 10
+2026-10-16T22:57:17Z canary.sh rolled back (exit 1)
+2026-10-16T22:57:17Z helm list -n sensor
+NAME  	NAMESPACE	REVISION	UPDATED                                	STATUS  	CHART               	APP VERSION
+sensor	sensor   	13      	2026-10-17 01:54:06.936181591 +0300 MSK	deployed	sensor-gateway-0.1.0	0.1.0      
+2026-10-16T22:57:17Z only stable release sensor remains
+2026-10-16T22:57:17Z smoke stable release sensor
+PASS ready 200
+PASS metrics contains service_up 1
+PASS GET /api/v1/service without cookie 401
+PASS login cookie dts_session
+PASS GET /api/v1/service with cookie 200
+PASS POST /api/v1/service/probe 200
+2026-10-16T22:57:17Z PASS canary-fail-demo: stable release sensor still serves traffic
+
