@@ -159,7 +159,7 @@ install_k3d_cluster() {
       --image "${K3S_IMAGE}" \
       --k3s-arg "--disable=traefik@server:0" \
       ${K3D_EXTRA_ARGS:-} \
-      -p "8081:80@loadbalancer" \
+      -p "${INGRESS_PORT:-8081}:80@loadbalancer" \
       --kubeconfig-switch-context \
       --wait
   fi
@@ -272,7 +272,8 @@ check_prereqs() {
   for cmd in curl openssl sha256sum tar git; do
     command -v "${cmd}" >/dev/null 2>&1 || missing+=("${cmd}")
   done
-  if [[ "${K3D}" == "1" ]]; then
+  # Docker нужен в обоих режимах: образы приложения всегда собираются локально.
+  if :; then
     command -v docker >/dev/null 2>&1 || missing+=("docker")
     if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
       echo "docker установлен, но недоступен текущему пользователю: sudo usermod -aG docker \"${USER}\" и перелогиниться" >&2
@@ -310,5 +311,5 @@ install_ingress_nginx
 
 echo "ready KUBECONFIG=${KUBECONFIG} ingress-nginx=${INGRESS_NGINX_VERSION}"
 if [[ "${K3D}" == "1" ]]; then
-  echo "k3d loadbalancer: http://sensor.localtest.me:8081"
+  echo "k3d loadbalancer: http://sensor.localtest.me:${INGRESS_PORT:-8081}"
 fi

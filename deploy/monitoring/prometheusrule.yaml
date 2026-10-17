@@ -32,3 +32,11 @@ spec:
           annotations:
             summary: "sensor-gateway: контейнер {{ $labels.container }} перезапускается"
             description: "Под {{ $labels.pod }} перезапустился больше 3 раз за 15 минут (crash loop или падающая liveness-проба)."
+        - alert: SensorGatewayIngress5xx
+          expr: (sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",status=~"5.."}[5m])) or vector(0)) / sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor"}[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "sensor-gateway: больше 5% ответов 5xx через ingress"
+            description: "Доля 5xx среди запросов к ingress namespace sensor (stable и canary) больше 5% уже 5 минут (метрики ingress-nginx)."

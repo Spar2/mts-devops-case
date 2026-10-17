@@ -36,7 +36,7 @@ password="$(openssl rand -base64 18 | tr -d '\n')"
 
 cd "${root}"
 sops set "${enc_rel}" '["stringData"]["DEMO_PASSWORD"]' "$(quote_scalar "${password}")"
-echo "Новый DEMO_PASSWORD записан в ${enc_rel}: ${password}"
+echo "Новый DEMO_PASSWORD записан в ${enc_rel} (в лог не печатается; показать: make status)."
 
 kubectl create namespace sensor --dry-run=client -o yaml | kubectl apply -f -
 sops -d deploy/secrets/sensor-secrets.enc.yaml | kubectl apply -f -

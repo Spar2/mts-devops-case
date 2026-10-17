@@ -14,10 +14,13 @@
 # Each step installs release sensor-canary (track=canary, canary.enabled=true,
 # canary.weight=W). Analysis then requires both gates:
 #   1. scripts/smoke.sh with X_CANARY=always
-#   2. Prometheus instant queries, after 10 requests with "X-Canary: always":
+#   2. Prometheus: wait up to 180 s for the canary target, send 10 requests with
+#      "X-Canary: always" through ingress-nginx, wait ANALYSIS_WAIT_S, then:
 #        min(up{namespace="sensor",service="sensor-canary-api"}) == 1
-#        sum(rate(http_requests_total{namespace="sensor",service="sensor-canary-api"}[2m])) > 0
-#      If PROM_URL accepts no TCP connection, the canary is rolled back.
+#        canary request rate from nginx_ingress_controller_requests
+#          {exported_namespace="sensor",canary=~".+sensor-canary.+"} > 0
+#        share of 5xx among those requests < 0.05
+#      Prometheus unreachable at PROM_URL also rolls the canary back.
 # A failed install or gate sets weight 0, uninstalls sensor-canary, prints
 # "ROLLBACK canary: <reason>", and does not change release sensor.
 # Success: scripts/deploy.sh TAG, then uninstall sensor-canary.

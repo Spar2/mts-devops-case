@@ -159,7 +159,7 @@ make up
 2. `scripts/secrets-init.sh` + `secrets-apply.sh` — ставит sops/age, генерирует ключ age этой машины и два зашифрованных Secret: `sensor-secrets` (пароль входа, ключ сессий) и `grafana-admin`;
 3. сборка образов из исходников и `k3d image import` (до мониторинга — ниже пик RAM) — **доступ к приватному GHCR не нужен**;
 4. `scripts/monitoring-install.sh` — kube-prometheus-stack 65.1.1, дашборд, правила алертов, приёмник алертов `alert-sink`;
-5. `scripts/deploy.sh` — Helm-релиз `sensor` (`--atomic`) и smoke-проверка; при провале — `helm rollback`;
+5. `scripts/deploy.sh` — Helm-релиз `sensor` (`--atomic`) и smoke-проверка; при провале — `helm rollback`, а на первой установке `helm uninstall`;
 6. `make status` — печатает адреса и пароль входа.
 
 Результат:
@@ -236,7 +236,9 @@ make down                # удалить кластер (и Compose-демо, �
 - Алерты (`deploy/monitoring/prometheusrule.yaml`):
   - `SensorGatewayDown` (critical): 1 минуту нет ни одного живого таргета API: `(sum(up{namespace="sensor",service=~".*-api"}) or vector(0)) == 0`;
   - `SensorGatewayNoReplicas` (critical): у Deployment в `sensor` `spec.replicas > 0`, а доступных реплик 0 (kube-state-metrics);
-  - `SensorGatewayPodRestarts` (warning): больше 3 рестартов контейнера за 15 минут. Почему `up`, а не `service_up`: `service_up` отдаёт сам
+  - `SensorGatewayPodRestarts` (warning): больше 3 рестартов контейнера за 15 минут;
+  - `SensorGatewayIngress5xx` (warning): доля 5xx через ingress-nginx в namespace `sensor` больше 5% 5 минут.
+  Все `SensorGateway.*` уходят на webhook `sensor-webhook`. Почему `up`, а не `service_up`: `service_up` отдаёт сам
   процесс, и при падении пода метрика просто исчезает; `up` выставляет Prometheus, а `or vector(0)` ловит и исчезновение ряда.
 - Доставка: Alertmanager шлёт `SensorGateway.*` (с `send_resolved`) на webhook `alert-sink` (`deploy/monitoring/alert-sink.yaml`).
   `make k8s-alert-demo` проверяет цепочку целиком: `scale --replicas=0` → firing в Prometheus → active в Alertmanager →
@@ -256,13 +258,13 @@ make down                # удалить кластер (и Compose-демо, �
   ближайшего пира, то есть nginx web, а не конечного клиента: это грубый лимит на под, а не на пользователя.
 - CI: Trivy блокирует образ с исправимыми HIGH/CRITICAL; push в GHCR только из `main`; `GITHUB_TOKEN` с `contents: read`, `packages: write`.
 - Grafana: пароль администратора случайный, лежит в SOPS-файле `deploy/secrets/grafana-admin.enc.yaml` (не в git), в кластер
-  попадает Secret `grafana-admin` (`admin.existingSecret`).
+  попадает Secret `grafana-admin` (`admin.existingSecret`). Смена пароля — `scripts/grafana-rotate.sh` (не проверена прогоном).
 - Поды приложения: seccomp `RuntimeDefault`, `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem` (запись только в emptyDir), без токена ServiceAccount.
   API: `runAsNonRoot`, uid 65534, `drop: [ALL]`. Web (nginx): мастер-процесс стартует от root и
   сбрасывает права на воркеры, поэтому `drop: [ALL]` плюс только `CHOWN, SETUID, SETGID, NET_BIND_SERVICE, DAC_OVERRIDE`.
   Requests/limits — выше.
-- NetworkPolicy: к API (порт 8000) пускают только web своего релиза и namespace monitoring (scrape), к web (порт 80) — только
-  namespace ingress-nginx. Проверка — `make k8s-netpol-check` в e2e. PDB `maxUnavailable: 1` для api и web.
+- NetworkPolicy: к API (порт 8000) пускают только web своего релиза и поды Prometheus (`app.kubernetes.io/name: prometheus` в namespace monitoring), к web (порт 80) — только
+  namespace ingress-nginx. Проверка — `make k8s-netpol-check` в e2e: из чужого namespace API и web недоступны, web через ingress-nginx отвечает 200, web своего релиза достаёт API. PDB `maxUnavailable: 1` для api и web.
 - kubeconfig нативного k3s: `/etc/rancher/k3s/k3s.yaml` с правами 600, копия пользователю в `~/.kube/config` (600).
 - Supply chain: Trivy до push; SBOM (SPDX JSON, `anchore/sbom-action`) обоих образов — артефакт прогона CI на `main`. Подпись cosign keyless
   сознательно не используется: запись в публичный Rekor раскрыла бы имя приватного репозитория.
