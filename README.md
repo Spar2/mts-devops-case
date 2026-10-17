@@ -43,7 +43,8 @@
 | Мониторинг: дашборд | `deploy/monitoring/` (kube-prometheus-stack 65.1.1) | Grafana → дашборд `sensor-gateway` | Проверено в k3d, скриншот `docs/img/grafana-sensor-gateway.png` |
 | Мониторинг: алерт | `deploy/monitoring/prometheusrule.yaml` | `kubectl -n sensor scale deploy sensor-api --replicas=0` | Проверено: `SensorGatewayDown` firing в Prometheus и в Alertmanager (`docs/monitoring-alert-proof.md`, скриншоты) |
 | Сеть ВМ (netplan) | `infra/cloud-init/network-config.yaml` → `libvirt_cloudinit_disk.network_config` | `cloud-init schema` (job `iac`); в госте `sudo netplan get`, `ip addr` | Схема валидна (cloud-init 26.1, job `iac`). На ВМ 2026-10-17: DHCP, `match: en*`, `ens3` получил `192.168.122.188/24`; адрес совпал с `terraform output vm_ip` и арендой libvirt |
-| Безопасность подов | securityContext, NetworkPolicy, PDB в чарте | `make k8s-netpol-check` | NetworkPolicy проверена в e2e на GitHub (чужой namespace → BLOCKED, web → API → REACHED) |
+| Безопасность подов | securityContext, NetworkPolicy (ingress и egress) в чарте | `make k8s-netpol-check` | Ingress NetworkPolicy проверена в e2e на GitHub (чужой namespace → BLOCKED, web → API → REACHED). Egress (web → DNS и api, у api исходящих нет) в кластере не прогонялся |
+| Отказоустойчивость stable | чарт: api и web по 2 реплики, PDB `minAvailable: 1`, HPA CPU 70% (min 2, max 4). Canary (`track=canary`): 1 реплика, без PDB и HPA | `helm template` stable и canary, `make lint` | Кластер не поднимался. `scripts/canary.sh`, `rollback-demo.sh` и `secrets-rotate-check.sh` на ровно одну реплику не завязаны |
 | Доставка алерта | Alertmanager → webhook `alert-sink` | `make k8s-alert-demo` | Проверено: firing → webhook → resolved (e2e и box) |
 | LLM: генерация конфигов с фиксацией промптов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Повтор 2026-10-17 (`make llm-up`, `-t 4`): из трёх фраз в `docs/llm/model-choice.md` с первой попытки valid одна (5xx, 16.88 с). Задержка invalid, attempts 2, 51.11 с. Память valid со 2-й, 104.27 с. Explain valid, 66.67 с. Оба прогона в `docs/llm/examples/runs.jsonl`. Job `llm` в CI |
 | Видео ≤ 5 мин | `docs/demo-script.md` | — | Сценарий готов, ролик снимает команда |
@@ -129,7 +130,7 @@ flowchart LR
 | `make llm-up` (опц.) | пик RSS 1.66 ГБ (2B-вариант ~0.7 ГБ) | 4–6 vCPU с AVX2 | 1.2 ГБ весов + 0.1 ГБ образ |
 | ВМ из `infra/terraform` | 8 ГиБ по умолчанию (`vm_memory_mib=8192`); живой прогон — 2048 МиБ | 4 vCPU по умолчанию; живой прогон — 2 | 30 ГиБ |
 
-Лимиты: API — requests 50m/128Mi, limits 500m/256Mi; web — 25m/64Mi и 200m/128Mi (`values.yaml`). У компонентов kube-prometheus-stack
+Лимиты: API — requests 50m/128Mi, limits 500m/256Mi; web — 25m/64Mi и 200m/128Mi (`values.yaml`). HPA stable (`autoscaling/v2`, CPU 70%, min 2, max 4) считает utilization от этих CPU requests. У canary HPA нет. У компонентов kube-prometheus-stack
 лимиты заданы в `values-kube-prometheus-stack.yaml`. У alert-sink — 10m/32Mi и 100m/64Mi (`alert-sink.yaml`). У ingress-nginx ресурсы не задаются (значения чарта по умолчанию, без limits).
 
 ## Как запустить (git clone …; make up)
@@ -230,6 +231,7 @@ make test
   Успех → promote в stable через `deploy.sh`, удаление canary.
 - Stable smoke во время canary шлёт `X-Canary: never`, чтобы проверять именно stable.
 - У api и web RollingUpdate `maxUnavailable: 0`, `maxSurge: 1` и `preStop: sleep 5`: старый под не снимают, пока новый не Ready, и SIGTERM уходит только после паузы, чтобы Endpoints и kube-proxy успели убрать под. Иначе nginx web отдаёт 502. `terminationGracePeriodSeconds: 40` покрывает паузу и штатное завершение; uvicorn по SIGTERM сам перестаёт принимать соединения и дожидается текущих, отдельный обработчик в приложении не добавлялся.
+- Stable: api и web по 2 реплики, PDB `minAvailable: 1`, HPA по CPU (min 2, max 4, 70%). Canary — 1 реплика без PDB и HPA, чтобы шаги веса и `helm uninstall` не ждали лишние поды и `preStop`. Подробности — в «Отказоустойчивость».
 
 ### Видео
 
@@ -246,7 +248,8 @@ make test
 - **ВМ libvirt.** Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально: Terraform 1.9.8, провайдер 0.8.3 из lock-файла, `fmt -check`, `init -backend=false`, `validate` (без демона libvirt), `cloud-init schema` для `user-data.example.yaml` и `network-config.yaml`. `user-data.yaml.tftpl` схема не принимает: директивы `templatefile` ломают YAML. Живой `terraform apply` на box 2026-10-17 доведён при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false` (лог `docs/iac-apply-log.md`): загрузка, cloud-init `status: done`, netplan, клон, `vm_ip` совпал с DHCP, затем `terraform destroy`. Не запускались значения по умолчанию (8 ГиБ / 4 vCPU, `run_make_up=true`) и `make up K3D=0` внутри этой ВМ; нативный `make up K3D=0` по-прежнему только e2e. До успешного прогона экземпляр box пересоздали (оператор связывает это с нехваткой памяти). Повторный apply после возврата k3d не делался.
 - Доставка алертов: webhook в кластерный `alert-sink` (пишет тело в лог). Почта и мессенджеры не настраивались.
 - Видео: не записано в репозитории, его снимает команда (требования выше).
-- `rollout status` возвращается, когда новые поды Ready, а старые ещё ~5 с отвечают в `preStop` со старым секретом. Поэтому `secrets-rotate.sh` и `secrets-apply.sh` после него ждут, пока старые поды API исчезнут: только после этого старый пароль гарантированно даёт 401.
+- `rollout status` возвращается, когда новые поды Ready, а старые ещё ~5 с отвечают в `preStop` со старым секретом. Поэтому `secrets-rotate.sh` и `secrets-apply.sh` после него ждут, пока старые поды API исчезнут: только после этого старый пароль гарантированно даёт 401. Ожидание идёт по всем подам с меткой `component=api`.
+- Две реплики, PDB `minAvailable: 1`, HPA и egress NetworkPolicy проверены рендером (`helm lint`, `helm template` stable и canary, `make lint` / kubeconform). Живой кластер после этих правок не поднимался: `make k8s-netpol-check`, срабатывание HPA и `make k8s-alert-demo` (он на время проверки снимает HPA `sensor-api`) не повторялись. Прежний e2e проверял только ingress NetworkPolicy.
 
 ## Мониторинг и наблюдаемость
 
@@ -267,10 +270,18 @@ make test
   Все `SensorGateway.*` уходят на webhook `sensor-webhook`. Почему `up`, а не `service_up`: `service_up` отдаёт сам
   процесс, и при падении пода метрика просто исчезает; `up` выставляет Prometheus, а `or vector(0)` ловит и исчезновение ряда.
 - Доставка: Alertmanager шлёт `SensorGateway.*` (с `send_resolved`) на webhook `alert-sink` (`deploy/monitoring/alert-sink.yaml`).
-  `make k8s-alert-demo` проверяет цепочку целиком: `scale --replicas=0` → firing в Prometheus → active в Alertmanager →
+  `make k8s-alert-demo` проверяет цепочку целиком: снимает HPA `sensor-api`, `scale --replicas=0` → firing в Prometheus → active в Alertmanager →
   тело алерта в логе alert-sink → API обратно → алерт пропал и пришло `status: resolved`. Прогоняется в e2e; лог —
   `docs/monitoring-alert-proof.md`, скриншоты `docs/img/prometheus-alert-firing.png`, `docs/img/alertmanager-alert.png`.
 - Скриншот дашборда снимается `scripts/grafana-screenshot.py` (Playwright + headless Chrome).
+
+## Отказоустойчивость
+
+- Stable (`track=stable`): api и web по 2 реплики (`values.yaml`). PDB `policy/v1`, `minAvailable: 1` на оба Deployment: один под можно выселить, второй обслуживает. С одной репликой такой PDB блокировал бы drain — поэтому раньше стоял `maxUnavailable: 1`, который при одной реплике не оставлял запас.
+- HPA `autoscaling/v2` по CPU, `hpa.enabled` по умолчанию true: min 2, max 4, target 70%. Отдельный объект на api и на web. CPU requests уже заданы (50m и 25m); без них utilization не считается. `helm upgrade --wait` ждёт Deployment, не HPA: если metrics-server недоступен, релиз всё равно Ready на числе реплик из чарта. В k3s metrics-server включён по умолчанию. Следующий `helm upgrade` записывает `spec.replicas` обратно в значение чарта (2); при нагрузке HPA поднимает его снова, до 4.
+- Canary (`track=canary`): шаблон ставит 1 реплику и не рендерит PDB и HPA, даже если в values они включены. Иначе шаги 10→50→100 и `helm uninstall --wait` ждали бы вторую реплику и `preStop` (5 с).
+- `scripts/canary.sh` ждёт `rollout status` Deployment, smoke идёт через ingress. `scripts/rollback-demo.sh` вызывает `deploy.sh` и смотрит `helm history`. `make k8s-rotate-demo` (`scripts/secrets-rotate-check.sh`) бьёт в ingress; `secrets-rotate.sh` перезапускает все Deployment API и ждёт, пока ни у одного пода не останется `deletionTimestamp`. Поиск по `replicas`, `pods -l`, `head -1`, `items[0]` в этих трёх скриптах на ровно одну реплику не указывает.
+- `make k8s-alert-demo` ставит `sensor-api` в 0 реплик. HPA с min 2 вернул бы поды за один цикл, поэтому скрипт на это время удаляет HPA `sensor-api` и на выходе применяет его снова, а реплики возвращает к числу до проверки (если оно было 0 — к 2). Этот путь после появления HPA на кластере не прогонялся.
 
 ## Безопасность
 
@@ -293,8 +304,8 @@ make test
   сбрасывает права на воркеры, поэтому `drop: [ALL]` плюс только `CHOWN, SETUID, SETGID, NET_BIND_SERVICE, DAC_OVERRIDE`.
   У web pod-level `securityContext` — только seccomp, без `runAsNonRoot`: иначе мастер не займёт :80.
   Requests/limits — выше.
-- NetworkPolicy: к API (порт 8000) пускают только web своего релиза и поды Prometheus (`app.kubernetes.io/name: prometheus` в namespace monitoring), к web (порт 80) — только
-  namespace ingress-nginx. Проверка — `make k8s-netpol-check` в e2e: из чужого namespace API и web недоступны, web через ingress-nginx отвечает 200, web своего релиза достаёт API. PDB `maxUnavailable: 1` для api и web.
+- NetworkPolicy, ingress как раньше: к API (порт 8000) пускают только web своего релиза и поды Prometheus (`app.kubernetes.io/name: prometheus` в namespace monitoring), к web (порт 80) — только
+  namespace ingress-nginx. Egress у web: DNS (namespace `kube-system`, UDP и TCP 53) и TCP 8000 на api своего релиза. Egress у api пустой (`egress: []`): в `services/api/app/main.py` нет исходящих вызовов, DNS и Kubernetes API (токен ServiceAccount не монтируется). Ответ на уже принятое соединение политика не режет. Проверка ingress — `make k8s-netpol-check` в e2e (прогон до egress): из чужого namespace API и web недоступны, web через ingress-nginx отвечает 200, web своего релиза достаёт API. Egress на кластере не проверялся.
 - kubeconfig нативного k3s: `/etc/rancher/k3s/k3s.yaml` с правами 600, копия пользователю в `~/.kube/config` (600).
 - Supply chain: Trivy до push; SBOM (SPDX JSON, `anchore/sbom-action`) обоих образов — артефакт прогона CI на `main`. Подпись cosign keyless
   сознательно не используется: запись в публичный Rekor раскрыла бы имя приватного репозитория.
@@ -396,6 +407,8 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; �
   (port-forward поднимает `scripts/prom-forward.sh`) или задать `PROM_URL`.
 - `make k8s-netpol-check` падает с `REACHED` из чужого namespace — в кластере не работает контроллер NetworkPolicy
   (например, нет модуля ipset в ядре).
+- HPA в статусе `FailedGetResourceMetric` — нет API `metrics.k8s.io`. Deployment при этом остаётся на своём `spec.replicas` (у stable это 2): `helm --wait` условие HPA не ждёт. На k3s metrics-server стоит по умолчанию (`kubectl get apiservice v1beta1.metrics.k8s.io`).
+- `make k8s-alert-demo` не дожидается firing — HPA `sensor-api` не снялся и вернул реплики. Скрипт удаляет его сам; ручной `scale --replicas=0` без `kubectl -n sensor delete hpa sensor-api` нуль не удержит.
 
 ## Лицензия
 
