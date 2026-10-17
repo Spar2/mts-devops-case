@@ -233,6 +233,8 @@ make down                # удалить кластер (и Compose-демо, �
 
   ![Grafana](docs/img/grafana-sensor-gateway.png)
 
+  Скриншот снят до последней правки дашборда (панели «живые таргеты» и «доля 5xx» на нём ещё нет).
+
 - Алерты (`deploy/monitoring/prometheusrule.yaml`):
   - `SensorGatewayDown` (critical): 1 минуту нет ни одного живого таргета API: `(sum(up{namespace="sensor",service=~".*-api"}) or vector(0)) == 0`;
   - `SensorGatewayNoReplicas` (critical): у Deployment в `sensor` `spec.replicas > 0`, а доступных реплик 0 (kube-state-metrics);
