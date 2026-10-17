@@ -184,6 +184,13 @@ wait_for_cluster() {
     fi
     sleep 2
   done
+  # Сразу после старта k3s узел может ещё не зарегистрироваться ("no matching resources").
+  for _ in $(seq 1 60); do
+    if kubectl get nodes -o name 2>/dev/null | grep -q .; then
+      break
+    fi
+    sleep 2
+  done
   kubectl wait --for=condition=Ready nodes --all --timeout=180s
 }
 
