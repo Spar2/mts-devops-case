@@ -5,6 +5,7 @@
 # Кроме Docker нужны git, make, curl, openssl, python3, sha256sum, tar и sudo
 # (helm/kubectl/k3d в /usr/local/bin и при необходимости строка в /etc/hosts).
 # Нативный k3s на хосте (ВМ, OpenStack-инстанс): make up K3D=0 (нужен sudo).
+# Бинарь релиза v1.31.4+k3s1 и install.sh тега сверяются sha256, get.k3s.io не используется.
 up: k8s-up status
 
 # Быстрое демо без Kubernetes: Docker Compose, ~1 минута, до 2 ГБ RAM.

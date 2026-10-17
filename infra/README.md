@@ -92,7 +92,7 @@ ssh ubuntu@$(cd infra/terraform && terraform output -raw vm_ip)
 sudo tail -f /var/log/mts-k8s-up.log
 ```
 
-Гостю нужен исходящий HTTPS: GitHub, `get.k3s.io`, репозитории Helm.
+Гостю нужен исходящий HTTPS: GitHub (клон, релиз k3s `v1.31.4+k3s1` и `raw.githubusercontent.com` для `install.sh` этого тега), репозитории Helm. `get.k3s.io` не используется. `scripts/k3s-install.sh` сверяет sha256 бинаря со `sha256sum-<arch>.txt` релиза и sha256 `install.sh`, затем запускает скрипт с диска с `INSTALL_K3S_SKIP_DOWNLOAD=true`. Живой `make up K3D=0` с этой сверкой не запускался.
 
 ## Первая загрузка
 
@@ -133,4 +133,4 @@ cloud-init schema -c infra/cloud-init/user-data.example.yaml
 - Целевой стек кейса — OpenStack + Kubernetes. Тот же `user-data` подходит для OpenStack Nova без изменений
   (`openstack server create --image ubuntu-24.04 --flavor <8GB> --user-data user-data.yaml …`): сеть инстанс получает
   из metadata Neutron, поэтому `network-config.yaml` там не нужен. Доступа к OpenStack-облаку у команды не было,
-  поэтому этот путь не запускался; проверен локальный эквивалент — `make up K3D=0` на Ubuntu 24.04 в GitHub Actions (job e2e).
+  поэтому этот путь не запускался; проверен локальный эквивалент — `make up K3D=0` на Ubuntu 24.04 в GitHub Actions (job e2e) со старым установщиком. Текущая сверка sha256 на кластере не запускалась.
