@@ -9,8 +9,11 @@
 # A running canary Service *-api keeps sum(up) above 0, so the alert stays
 # quiet until that Deployment is scaled down too.
 #
-# On any exit, including failure and SIGINT, replicas go back to 1 and the
-# rollout is waited out.
+# On any exit, including failure and SIGINT, replicas go back to the count
+# captured before the outage (2 when that count was 0 or empty) and the
+# rollout is waited out. HPA sensor-api is deleted for the outage: with
+# minReplicas 2 it would scale the Deployment back up within one sync.
+# The HPA object is applied again on the way out.
 #
 # Usage: alert-demo.sh
 
@@ -26,6 +29,60 @@ now() {
 
 pass() {
   printf 'PASS %s\n' "$*"
+}
+
+# Число реплик до scale 0. Пустое или 0 заменяем на 2 — это значение чарта stable.
+api_replicas=2
+# Очищенный манифест HPA sensor-api, если объект был. Пусто — HPA не было.
+hpa_backup=""
+
+remember_api_replicas() {
+  local n
+  n="$(kubectl -n sensor get deployment sensor-api -o jsonpath='{.spec.replicas}')"
+  if [[ "$n" =~ ^[1-9][0-9]*$ ]]; then
+    api_replicas="$n"
+  else
+    api_replicas=2
+  fi
+}
+
+# HPA с minReplicas 2 за секунды вернёт поды, и SensorGatewayDown не продержится минуту.
+suspend_api_hpa() {
+  local raw
+  hpa_backup=""
+  if ! kubectl -n sensor get hpa sensor-api >/dev/null 2>&1; then
+    printf '%s hpa/sensor-api absent, scale will stick\n' "$(now)"
+    return 0
+  fi
+  raw="$(kubectl -n sensor get hpa sensor-api -o json)"
+  hpa_backup="$(mktemp)"
+  printf '%s' "$raw" | python3 -c '
+import json, sys
+obj = json.load(sys.stdin)
+meta = obj.get("metadata", {})
+for key in ("resourceVersion", "uid", "creationTimestamp", "generation", "managedFields", "selfLink"):
+    meta.pop(key, None)
+ann = meta.get("annotations") or {}
+ann.pop("kubectl.kubernetes.io/last-applied-configuration", None)
+if ann:
+    meta["annotations"] = ann
+else:
+    meta.pop("annotations", None)
+obj.pop("status", None)
+json.dump(obj, sys.stdout)
+' >"$hpa_backup"
+  kubectl -n sensor delete hpa sensor-api --wait=true
+  printf '%s deleted hpa/sensor-api for the outage\n' "$(now)"
+}
+
+restore_api_hpa() {
+  if [[ -z "${hpa_backup}" || ! -f "${hpa_backup}" ]]; then
+    return 0
+  fi
+  kubectl apply -f "${hpa_backup}"
+  rm -f "${hpa_backup}"
+  hpa_backup=""
+  printf '%s restored hpa/sensor-api\n' "$(now)"
 }
 
 # $1 kind: prom (Prometheus /api/v1/alerts) or am (Alertmanager /api/v2/alerts)
@@ -135,8 +192,8 @@ resolved_hits() {
 wait_resolved() {
   local before state json deadline
   before="$(resolved_hits)"
-  printf '%s scaling deployment/sensor-api back to 1\n' "$(now)"
-  kubectl -n sensor scale deployment/sensor-api --replicas=1
+  printf '%s scaling deployment/sensor-api back to %s\n' "$(now)" "$api_replicas"
+  kubectl -n sensor scale deployment/sensor-api --replicas="$api_replicas"
   kubectl -n sensor rollout status deployment/sensor-api --timeout=180s
   deadline=$((SECONDS + 240))
   state="firing"
@@ -160,13 +217,19 @@ restore() {
   if [[ ! "$rc" =~ ^[0-9]+$ ]]; then
     rc=1
   fi
-  printf '%s restoring deployment/sensor-api to 1 replica\n' "$(now)"
-  if ! kubectl -n sensor scale deployment/sensor-api --replicas=1; then
-    printf 'FAIL could not scale deployment/sensor-api to 1\n' >&2
+  printf '%s restoring deployment/sensor-api to %s replicas\n' "$(now)" "${api_replicas}"
+  if ! kubectl -n sensor scale deployment/sensor-api --replicas="${api_replicas}"; then
+    printf 'FAIL could not scale deployment/sensor-api to %s\n' "$api_replicas" >&2
+    restore_api_hpa || printf 'FAIL could not restore hpa/sensor-api\n' >&2
     exit 1
   fi
   if ! kubectl -n sensor rollout status deployment/sensor-api --timeout=180s; then
     printf 'FAIL deployment/sensor-api rollout after restore\n' >&2
+    restore_api_hpa || printf 'FAIL could not restore hpa/sensor-api\n' >&2
+    exit 1
+  fi
+  if ! restore_api_hpa; then
+    printf 'FAIL could not restore hpa/sensor-api\n' >&2
     exit 1
   fi
   exit "$rc"
@@ -213,9 +276,14 @@ main() {
   fi
   printf '%s alert-sink SensorGatewayDown lines before outage: %s\n' "$(now)" "$hits_before"
 
+  remember_api_replicas
+  printf '%s deployment/sensor-api replicas before outage: %s\n' "$(now)" "$api_replicas"
+
   trap 'restore $?' EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
+
+  suspend_api_hpa
 
   printf '%s scaling deployment/sensor-api to 0\n' "$(now)"
   kubectl -n sensor scale deployment/sensor-api --replicas=0
