@@ -6,6 +6,8 @@ locals {
   # Поток release, не daily. Имя файла стабильное, содержимое — текущий point-release 24.04.
   ubuntu_image_url = "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
   disk_bytes       = 30 * 1024 * 1024 * 1024 # 30 GiB
+  # filebase64 читает ключ только если путь задан. Пустая строка — публичный HTTPS clone.
+  github_deploy_key_b64 = var.github_deploy_key_path == "" ? "" : sensitive(filebase64(var.github_deploy_key_path))
 }
 
 resource "libvirt_volume" "base" {
@@ -25,10 +27,10 @@ resource "libvirt_cloudinit_disk" "sensor" {
   name = "mts-sensor-cloudinit.iso"
   pool = "default"
   user_data = templatefile("${path.module}/../cloud-init/user-data.yaml.tftpl", {
-    repo_url       = var.repo_url
-    github_token   = var.github_token
-    ssh_public_key = var.ssh_public_key
-    run_make_up    = var.run_make_up
+    repo_url              = var.repo_url
+    github_deploy_key_b64 = local.github_deploy_key_b64
+    ssh_public_key        = var.ssh_public_key
+    run_make_up           = var.run_make_up
   })
   network_config = file("${path.module}/../cloud-init/network-config.yaml")
   meta_data = yamlencode({

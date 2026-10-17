@@ -31,12 +31,12 @@
 | --- | --- | --- | --- |
 | Запуск ≤ 3 командами | `Makefile` (`make up`) | `git clone … && cd mts-devops-case && make up` | Проверено: свежий клон e0fe907 на box без кластера, `make up` за 2 мин 0 с (smoke: вход, probe, 401 без cookie, `/metrics`); повторный `make k8s-up K3D=1` идемпотентен (1 мин 11 с). Тот же путь — в e2e GitHub Actions: k3d на pull request в `main`, k3d и нативный k3s на push в `main` и по `workflow_dispatch` |
 | IaC: кластер | `scripts/k3s-install.sh`, `infra/ansible/site.yml` | `make k8s-up` / `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` | k3d: свежий клон на box и e2e; нативный k3s (`make up K3D=0`): только e2e на `ubuntu-24.04`. Лог `docs/k8s-up-log.md`. Полный прогон плейбука в репозитории не залогирован; syntax-check — job `iac` (ansible-core 2.17.14) |
-| IaC: ВМ | `infra/cloud-init/`, `infra/terraform/` (libvirt, lock 0.8.3) | job `iac`: `terraform fmt -check`, `init -backend=false`, `validate`, `cloud-init schema`; живой `terraform apply` (`vm_memory_mib`, `vm_vcpu`, `run_make_up`) и `terraform destroy` | Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально (Terraform 1.9.8, cloud-init 26.1, схемы `Valid`). Живой apply на box 2026-10-17: 2048 МиБ / 2 vCPU, `run_make_up=false`, cloud-init `status: done`, клон и пакеты, `vm_ip` совпал с DHCP. `make up` в госте не запускался. Лог `docs/iac-apply-log.md` |
+| IaC: ВМ | `infra/cloud-init/`, `infra/terraform/` (libvirt, lock 0.8.3) | job `iac`: `terraform fmt -check`, `init -backend=false`, `validate`, `cloud-init schema`; живой `terraform apply` (`vm_memory_mib`, `vm_vcpu`, `run_make_up`) и `terraform destroy` | Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально на той схеме (Terraform 1.9.8, cloud-init 26.1, схемы `Valid`). Живой apply на box 2026-10-17 шёл с `github_token` (переменной больше нет): 2048 МиБ / 2 vCPU, `run_make_up=false`, cloud-init `status: done`, клон и пакеты, `vm_ip` совпал с DHCP. `make up` в госте не запускался. Лог `docs/iac-apply-log.md`. Новая схема (HTTPS без токена или `github_deploy_key_path`) на ВМ не применялась |
 | CI: линт, тесты, сборка | `.github/workflows/ci.yml` | вкладка Actions | Зелёный прогон на GitHub (jobs lint, api, web, helm, manifests, dockerfiles, shellcheck, llm, iac, images). Job `iac` зелёный на GitHub (pull request #3) и воспроизведён локально |
 | Сканирование образов | job `images` и job `iac` (config: чарт, Dockerfile, Terraform), `trivy-action` v0.36.0 (Trivy v0.70.0), HIGH/CRITICAL; SBOM (anchore/sbom-action) на `main` | Actions → images и iac | Образы: CVE (Starlette, OpenSSL в alpine) исправлены, прогон зелёный. Config: локально Trivy 0.70.0, чарт и Terraform без HIGH/CRITICAL; DS-0002 nginx-образа — `apps/web/.trivyignore` |
 | Публикация в registry | там же, push в `ghcr.io/spar2/mts-devops-case/*` только из `main` | Actions → images → Push images | Шаг выполняется в зелёном прогоне |
 | Проверка манифестов | `scripts/lint-manifests.sh` (kubeconform 0.6.7: stable, canary, два манифеста мониторинга), hadolint 2.12.0, shellcheck 0.10.0 | `make lint` | Проверено локально: `make lint` код 0. Сломанный YAML и скрипт с ошибкой shellcheck дают ненулевой код (правки откачены). Job `manifests` вызывает тот же скрипт |
-| CD: Helm + откат | `deploy/helm/sensor-gateway` (RollingUpdate `maxUnavailable: 0`, `preStop`), `scripts/deploy.sh` (`--atomic` + smoke + `helm rollback`) | `make k8s-rollback-demo` | Проверено: битый тег → откат `--atomic`; провал smoke → `helm rollback` (лог `docs/cd-demo-log.md`). С `preStop` полный прогон с нуля на box 2026-10-17: `make up`, canary, canary-fail, rollback-demo, alert-demo — PASS |
+| CD: Helm + откат | `deploy/helm/sensor-gateway` (RollingUpdate `maxUnavailable: 0`, `preStop`), `scripts/deploy.sh` (`--atomic` + smoke + `helm rollback` / `uninstall`) | `make k8s-rollback-demo`; без кластера — `scripts/test-deploy-rollback.sh` в `make lint` | Проверено на кластере: битый тег → откат `--atomic`; провал smoke → `helm rollback` (лог `docs/cd-demo-log.md`). С `preStop` полный прогон с нуля на box 2026-10-17: `make up`, canary, canary-fail, rollback-demo, alert-demo — PASS. Ветка «нет ревизий / одна ревизия / ошибка самого rollback» на кластере этим прогоном не покрыта: её гоняет `test-deploy-rollback.sh` (заглушки helm/kubectl) |
 | CD: canary через ingress | `scripts/canary.sh` (вес 10→50→100, smoke + PromQL: `up`, трафик и доля 5xx canary по метрикам ingress-nginx) | `make k8s-canary` | Проверено: успешный canary с promote и провальный canary с автооткатом, stable не задет (`docs/cd-demo-log.md`) |
 | Сессии не теряются между stable и canary | подписанная cookie (HMAC) в `services/api/app/main.py` | тесты + запрос с cookie от stable в canary | Проверено: 200 на canary с cookie, выданной stable |
 | Секреты вне git | SOPS 3.9.2 + age 1.2.1, `scripts/secrets-*.sh`, `deploy/secrets/README.md` | `scripts/secrets-rotate-check.sh` | Лог 2026-10-17: старый пароль и cookie → 401, новый → 200 (`docs/secrets-rotation-log.md`). Без паузы перед SIGTERM на 1 реплике скрипт ловил 502; с `preStop` и ожиданием ухода старых подов в `secrets-rotate.sh` — 3 прогона подряд PASS на box 2026-10-17 |
@@ -105,9 +105,9 @@ flowchart LR
 | nginx | 1.29-alpine + `apk upgrade` |
 | Docker / Compose | Docker 24+ с BuildKit / Compose V2 (проверено 2.30.3) |
 | k3s | v1.31.4+k3s1, traefik отключён |
-| k3d (режим по умолчанию) | v5.8.3 |
-| kubectl | v1.31.4 |
-| Helm | v3.16.3 |
+| k3d (режим по умолчанию) | v5.8.3, sha256 в `scripts/k3s-install.sh` |
+| kubectl | v1.31.4, sha256 в `scripts/k3s-install.sh` |
+| Helm | v3.16.3, sha256 в `scripts/k3s-install.sh` (те же суммы архива, что в `scripts/lint-manifests.sh`) |
 | ingress-nginx | чарт 4.11.3, https://kubernetes.github.io/ingress-nginx. Проект объявлен архивным 2026-03-24, версия зафиксирована и работает; на замену стоит смотреть Gateway API |
 | kube-prometheus-stack | чарт 65.1.1, https://prometheus-community.github.io/helm-charts (Prometheus 2.54.1, Grafana 11.2.1, Alertmanager 0.27.0) |
 | SOPS / age | 3.9.2 / 1.2.1 |
@@ -119,6 +119,8 @@ flowchart LR
 | Приёмник алертов | `mendhak/http-https-echo:34` |
 
 Только открытые чарты из публичных репозиториев. Чарты и бинарники конвейера запинены. cloud-init в CI — пакет архива ubuntu-24.04 без пина.
+
+`scripts/k3s-install.sh` перед первой установкой сверяет sha256 скачанного файла (уже стоящий бинарь нужной версии повторно не качается и не сверяется). Суммы сняты 2026-10-17 с официальных файлов: Helm — `https://get.helm.sh/helm-v3.16.3-linux-<arch>.tar.gz.sha256sum` (amd64 `f5355c79190951eed23c5432a3b920e071f4c00a64f75e077de0dd4cb7b294ea`, arm64 `5bd34ed774df6914b323ff84a0a156ea6ff2ba1eaf0113962fa773f3f9def798`); kubectl — `https://dl.k8s.io/release/v1.31.4/bin/linux/<arch>/kubectl.sha256` (amd64 `298e19e9c6c17199011404278f0ff8168a7eca4217edad9097af577023a5620f`, arm64 `b97e93c20e3be4b8c8fa1235a41b4d77d4f2022ed3d899230dbbbbd43d26f872`); k3d — строки `_dist/k3d-linux-amd64` и `_dist/k3d-linux-arm64` из `https://github.com/k3d-io/k3d/releases/download/v5.8.3/checksums.txt` (amd64 `dbaa79a76ace7f4ca230a1ff41dc7d8a5036a8ad0309e9c54f9bf3836dbe853e`, arm64 `0b8110f2229631af7402fb828259330985918b08fefd38b7f1b788a1c8687216`). `<arch>` — `amd64` или `arm64`.
 
 ### Ресурсы
 
@@ -154,12 +156,13 @@ make up
 
 `make up` поднимает **полное решение** (~5 минут на чистой машине):
 
-1. `scripts/k3s-install.sh` — проверяет зависимости, ставит pinned helm v3.16.3 / kubectl v1.31.4 / k3d v5.8.3, создаёт
-   k3d-кластер `mts` (k3s v1.31.4 в Docker), ставит ingress-nginx 4.11.3 и ждёт готовности его admission webhook;
+1. `scripts/k3s-install.sh` — проверяет зависимости, ставит pinned helm v3.16.3 / kubectl v1.31.4 / k3d v5.8.3
+   (sha256 архива или бинаря), создаёт k3d-кластер `CLUSTER` (по умолчанию `mts`, k3s v1.31.4 в Docker), ставит ingress-nginx 4.11.3 и ждёт готовности его admission webhook.
+   Если кластер с этим именем уже есть, скрипт его не удаляет и не пересоздаёт: в stderr предупреждение, что образ, проброс порта и `K3D_EXTRA_ARGS` этого запуска не применяются;
 2. `scripts/secrets-init.sh` + `secrets-apply.sh` — ставит sops/age, генерирует ключ age этой машины и два зашифрованных Secret: `sensor-secrets` (пароль входа, ключ сессий) и `grafana-admin`;
 3. сборка образов из исходников и `k3d image import` (до мониторинга — ниже пик RAM) — **доступ к приватному GHCR не нужен**;
 4. `scripts/monitoring-install.sh` — kube-prometheus-stack 65.1.1, дашборд, правила алертов, приёмник алертов `alert-sink`;
-5. `scripts/deploy.sh` — Helm-релиз `sensor` (`--atomic`) и smoke-проверка; при провале — `helm rollback`, а на первой установке `helm uninstall`;
+5. `scripts/deploy.sh` — Helm-релиз `sensor` (`--atomic`) и smoke-проверка; при провале — `helm rollback`, а если ревизия одна или её нет — `helm uninstall`. Ошибка history не обрывает скрипт до этой команды; ошибка самого rollback/uninstall даёт код 1 и строку `error:`;
 6. `make status` — печатает адреса и пароль входа.
 
 Результат:
@@ -178,7 +181,7 @@ make k8s-rollback-demo   # битый тег образа → helm --atomic от
 make k8s-rotate-demo     # ротация пароля: старый пароль и старая cookie → 401, новый → 200
 make k8s-alert-demo      # API выключается → SensorGatewayDown firing → Alertmanager → webhook alert-sink → API обратно → resolved
 make k8s-netpol-check    # NetworkPolicy: под из чужого namespace не достаёт API, web достаёт (нужен работающий контроллер политик)
-make down                # demo-down, если есть .env; K3D=1: ещё k3d cluster delete; K3D=0: снять релизы sensor-canary, sensor, mon, k3s не удаляет
+make down                # demo-down, если есть .env; K3D=1: ещё k3d cluster delete $(CLUSTER) (по умолчанию mts); K3D=0: снять релизы sensor-canary, sensor, mon, k3s не удаляет
 ```
 
 Другие режимы:
@@ -187,7 +190,7 @@ make down                # demo-down, если есть .env; K3D=1: ещё k3d 
 - `make up K3D=0` — нативный k3s на хосте (ВМ, OpenStack-инстанс), ingress на `:80`. Проверено в GitHub Actions на Ubuntu 24.04.
 - `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` — плейбук-обёртка над `make k8s-up`
   (локальный, `connection: local`; логика не дублируется).
-- ВМ: `infra/README.md` — Terraform (libvirt) + cloud-init + netplan. По умолчанию внутри ВМ выполняется `make up K3D=0` (`run_make_up=true`). Живой прогон на box — с `run_make_up=false`, лог `docs/iac-apply-log.md`.
+- ВМ: `infra/README.md` — Terraform (libvirt) + cloud-init + netplan. По умолчанию внутри ВМ выполняется `make up K3D=0` (`run_make_up=true`). Клон на ВМ без GitHub-токена (публичный HTTPS) либо по deploy-key (`github_deploy_key_path`). Живой прогон на box — старая схема с `github_token` и `run_make_up=false`, лог `docs/iac-apply-log.md`. Повторный apply после удаления токена не делался.
 - Образы из GHCR (их пушит CI из `main`): пакеты приватные, как и репозиторий. `GHCR_USER=… GHCR_TOKEN=<PAT read:packages> make ghcr-secret`
   создаёт pull-secret `ghcr`, затем `make k8s-deploy-ghcr TAG=<sha>`. Создание секрета и шаблон чарта проверены, вытягивание из
   приватного GHCR в кластере — нет. Путь по умолчанию (локальная сборка) от GHCR не зависит.
@@ -201,25 +204,28 @@ make lint
 make test
 ```
 
-`make lint` — jobs `lint`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff check llm` из job `llm`:
+`make lint` — jobs `lint`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff check llm` из job `llm`, плюс локальный сценарий отката `scripts/test-deploy-rollback.sh` (в CI job `shellcheck` его нет: workflow вызывает только `make lint-shellcheck`):
 
 - ruff 0.8.4: `ruff check services/api` и `ruff check llm`. Бинарь этой версии из PATH, иначе образ `ghcr.io/astral-sh/ruff:0.8.4`;
 - Helm v3.16.3: `helm lint` и `helm template` чарта (`deploy/helm/sensor-gateway`, namespace `sensor`);
 - kubeconform 0.6.7: `scripts/lint-manifests.sh` (его же вызывает job `manifests`) — stable, canary (`track=canary`, вес 10, api-versions `monitoring.coreos.com/v1` и `monitoring.coreos.com/v1/ServiceMonitor`) и файлы `deploy/monitoring/dashboard-configmap.yaml`, `prometheusrule.yaml`. Флаги: `-strict -summary -kubernetes-version 1.31.0`, схемы default и CRDs-catalog;
 - hadolint 2.12.0 с `--failure-threshold error` для `services/api/Dockerfile` и `apps/web/Dockerfile` (в CI это `hadolint/hadolint-action@v3.1.0`);
-- shellcheck 0.10.0 для `scripts/*.sh`.
+- shellcheck 0.10.0 для `scripts/*.sh`;
+- `scripts/test-deploy-rollback.sh`: `deploy.sh` после проваленного smoke. Заглушки `helm` и `kubectl` в PATH, HTTP 500 на localhost, кластер не поднимается. Проверяются пустая история, одна ревизия, битый JSON, объект вместо списка, ненулевой код `helm history`, откат при двух ревизиях и ненулевой код с текстом `error: helm rollback` / `error: helm uninstall`, если сама команда отката падает.
 
 Если ruff, hadolint или shellcheck нужной версии нет в PATH, нужен Docker (`hadolint/hadolint:v2.12.0`, `koalaman/shellcheck:v0.10.0`). Helm и kubeconform без sudo ставятся в `~/.local/bin`, архив сверяется sha256 (суммы в `scripts/lint-manifests.sh`). kubeconform скачивает JSON Schema, нужен исходящий HTTPS.
 
 `make test` — job `api` (pytest в `services/api`) и job `web` (`npm ci && npm run build`). Остальное из job `llm` (pytest и promtool) — `make llm-test` и `python llm/llm_gen.py validate-rule deploy/monitoring/prometheusrule.yaml`.
 
-Проверено локально: `make lint` завершился с кодом 0. Невалидный YAML в `deploy/monitoring/prometheusrule.yaml` и синтаксическая ошибка в `scripts/smoke.sh` дают ненулевой код; оба файла возвращены как были.
+Проверено локально: `make lint` завершился с кодом 0. Невалидный YAML в `deploy/monitoring/prometheusrule.yaml` и синтаксическая ошибка в `scripts/smoke.sh` дают ненулевой код; оба файла возвращены как были. На этой ветке `make lint` снова код 0, включая `scripts/test-deploy-rollback.sh`.
 
 ### Как работает CD
 
 - `scripts/deploy.sh TAG` — `helm upgrade --install --atomic --wait --timeout 3m`; если поды не стали ready, Helm откатывает
-  релиз сам. Затем `scripts/smoke.sh` (`/ready`, `/metrics`, 401 без cookie, вход, `/api/v1/service`, probe); при провале
-  `helm rollback sensor 0`, а если это была первая установка (откатываться некуда) — `helm uninstall sensor`.
+  релиз сам. Затем `scripts/smoke.sh` (`/ready`, `/metrics`, 401 без cookie, вход, `/api/v1/service`, probe). При провале smoke
+  число ревизий берётся из `helm history -o json`. Ошибка history, пустой вывод, битый JSON и не-список считаются нулём ревизий и не обрывают скрипт до отката.
+  Ноль или одна ревизия — `helm uninstall sensor` (предыдущей нет). Две и больше — `helm rollback sensor 0`. Если uninstall или rollback сам завершился с ошибкой, скрипт печатает `error: helm uninstall … failed` или `error: helm rollback … failed` и выходит с кодом 1. Успешный откат после проваленного smoke тоже код 1.
+  Сценарий без кластера — `scripts/test-deploy-rollback.sh` (`make lint`). На живом кластере откат по-прежнему в `docs/cd-demo-log.md` и `make k8s-rollback-demo` (это `--atomic`, не ветка smoke).
 - `scripts/canary.sh TAG` — релиз `sensor-canary` с аннотациями ingress-nginx `canary`, `canary-weight`, `canary-by-header: X-Canary`.
   На каждом шаге: smoke через `X-Canary: always`, нагрузка через ingress, затем PromQL (`up` canary — если Prometheus успел обнаружить target за 120 с; основной гейт — метрики ingress-nginx):
   `min(up{namespace="sensor",service="sensor-canary-api"}) == 1`;
@@ -243,7 +249,7 @@ make test
   `K3D_PRELOAD=1` (из подов нет egress), `INGRESS_SERVICE_TYPE=NodePort` (не работает hostPort) и host-gw вместо vxlan —
   на обычной Ubuntu они не нужны. В песочнице нет и ipset, поэтому контроллер NetworkPolicy k3s там не стартует
   и `make k8s-netpol-check` честно падает; на GitHub-раннере (обычный kernel) проверка проходит.
-- **ВМ libvirt.** Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально: Terraform 1.9.8, провайдер 0.8.3 из lock-файла, `fmt -check`, `init -backend=false`, `validate` (без демона libvirt), `cloud-init schema` для `user-data.example.yaml` и `network-config.yaml`. `user-data.yaml.tftpl` схема не принимает: директивы `templatefile` ломают YAML. Живой `terraform apply` на box 2026-10-17 доведён при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false` (лог `docs/iac-apply-log.md`): загрузка, cloud-init `status: done`, netplan, клон, `vm_ip` совпал с DHCP, затем `terraform destroy`. Не запускались значения по умолчанию (8 ГиБ / 4 vCPU, `run_make_up=true`) и `make up K3D=0` внутри этой ВМ; нативный `make up K3D=0` по-прежнему только e2e. До успешного прогона экземпляр box пересоздали (оператор связывает это с нехваткой памяти). Повторный apply после возврата k3d не делался.
+- **ВМ libvirt.** Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально на схеме с `github_token`: Terraform 1.9.8, провайдер 0.8.3 из lock-файла, `fmt -check`, `init -backend=false`, `validate` (без демона libvirt), `cloud-init schema` для `user-data.example.yaml` и `network-config.yaml`. `user-data.yaml.tftpl` схема не принимает: директивы `templatefile` ломают YAML. Живой `terraform apply` на box 2026-10-17 доведён при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false` и `TF_VAR_github_token` (лог `docs/iac-apply-log.md`): загрузка, cloud-init `status: done`, netplan, клон, `vm_ip` совпал с DHCP, затем `terraform destroy`. Переменной `github_token` в коде больше нет: клон без токена или через `github_deploy_key_path`. Этот вариант `apply` не проходил. `terraform fmt -check` и `validate` новой схемы — успех (Terraform 1.9.8, в том числе образ `hashicorp/terraform:1.9.8`). `terraform plan` без apply не дошёл до плана: нет `/var/run/libvirt/libvirt-sock`. Не запускались значения по умолчанию (8 ГиБ / 4 vCPU, `run_make_up=true`) и `make up K3D=0` внутри этой ВМ; нативный `make up K3D=0` по-прежнему только e2e. До успешного прогона экземпляр box пересоздали (оператор связывает это с нехваткой памяти). Повторный apply после возврата k3d не делался.
 - Доставка алертов: webhook в кластерный `alert-sink` (пишет тело в лог). Почта и мессенджеры не настраивались.
 - Видео: не записано в репозитории, его снимает команда (требования выше).
 - `rollout status` возвращается, когда новые поды Ready, а старые ещё ~5 с отвечают в `preStop` со старым секретом. Поэтому `secrets-rotate.sh` и `secrets-apply.sh` после него ждут, пока старые поды API исчезнут: только после этого старый пароль гарантированно даёт 401.
@@ -298,10 +304,10 @@ make test
 - kubeconfig нативного k3s: `/etc/rancher/k3s/k3s.yaml` с правами 600, копия пользователю в `~/.kube/config` (600).
 - Supply chain: Trivy до push; SBOM (SPDX JSON, `anchore/sbom-action`) обоих образов — артефакт прогона CI на `main`. Подпись cosign keyless
   сознательно не используется: запись в публичный Rekor раскрыла бы имя приватного репозитория.
-- Cloud-init: GitHub-токен для приватного репо передаётся через Terraform (`sensitive`) ; после клонирования скрипт удаляет
-  `.netrc` и файл токена. Но токен остаётся в ISO cloud-init, в копии user-data, которую cloud-init хранит на диске гостя
-  (`/var/lib/cloud/instance/`), и в state Terraform: `*.tfstate` в `.gitignore`, токен
-  лучше брать fine-grained, только на чтение и на короткий срок.
+- Cloud-init не получает GitHub-токен. По умолчанию ВМ клонирует репозиторий по HTTPS без учётных данных.
+  Для приватного репозитория — `github_deploy_key_path` (абсолютный путь к приватному ключу на хосте Terraform) и SSH `repo_url`.
+  `runcmd` удаляет файл ключа с ВМ после clone (`/root/.config/mts/github-deploy-key.b64` и `/home/ubuntu/.ssh/github-deploy-key`).
+  Если ключ передавали, его байты всё равно попадают в ISO cloud-init, в копию user-data на диске гостя (`/var/lib/cloud/instance/`) и в state Terraform (`*.tfstate` в `.gitignore`). Живой apply 2026-10-17 ещё использовал `github_token`; новая схема на ВМ не проверялась.
 
 ## Использование LLM
 
@@ -386,6 +392,8 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; �
 - После входа снова форма — открывать именно `http://127.0.0.1:8080`, не файл и не другой хост.
 - Образ не собирается — нужен BuildKit и Compose V2 (есть в Ubuntu 24.04).
 - `make up K3D=0` падает на установке k3s — нужен sudo и доступ к get.k3s.io (режим k3d по умолчанию get.k3s.io не использует); повторный запуск идемпотентен.
+- `sha256 не совпал` при установке helm, kubectl или k3d — скачанный файл не равен сумме в `scripts/k3s-install.sh`. Повторный запуск качает файл заново. Если бинарь этой версии уже есть, скрипт его не перекачивает и сумму не считает.
+- Повторный `make up` пишет `предупреждение: k3d-кластер … уже существует` — образ, порт и `K3D_EXTRA_ARGS` к живому кластеру не применяются. Другое имя: `make up CLUSTER=имя`. Сменить параметры того же имени: `k3d cluster delete имя` и снова `make up`.
 - Поды в `ImagePullBackOff` — образы приложения не импортированы: `make k8s-images`; при закрытом egress из подов `K3D_PRELOAD=1` подгружает в k3d сторонние образы (ingress-nginx, мониторинг, alert-sink), образы приложения всегда импортирует `make k8s-images`.
 - `sensor.localtest.me` не открывается — DNS не отдаёт 127.0.0.1: добавить `127.0.0.1 sensor.localtest.me grafana.localtest.me` в `/etc/hosts`.
 - Smoke падает на входе после смены секрета — Secret читается подами при старте; `scripts/secrets-apply.sh` сам делает `rollout restart`.
