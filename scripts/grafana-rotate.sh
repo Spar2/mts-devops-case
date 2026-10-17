@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Новый случайный пароль администратора Grafana: sops set в
 # deploy/secrets/grafana-admin.enc.yaml, apply Secret grafana-admin, рестарт Grafana.
-# Пароль в лог не печатается (показывает make status).
+# Пароль в лог не печатается (SHOW_SECRETS=1 make status).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PATH="${HOME}/.local/bin:${PATH}"
@@ -17,4 +17,4 @@ sops -d "${enc_rel}" | kubectl apply -f -
 # Grafana берёт пароль из Secret при старте и сама обновляет пароль admin.
 kubectl -n monitoring rollout restart deployment/mon-grafana
 kubectl -n monitoring rollout status deployment/mon-grafana --timeout=180s
-echo "Пароль Grafana сменён (показать: make status)."
+echo "Пароль Grafana сменён (показать: SHOW_SECRETS=1 make status)."

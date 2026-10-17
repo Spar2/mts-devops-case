@@ -22,6 +22,15 @@ die() {
   exit 1
 }
 
+# Раннер Actions вырезает строку из лога и маскирует значение дальше по job.
+# Вне Actions строку не печатаем: иначе при CI=true пароль попал бы в терминал.
+mask_actions() {
+  local value="$1"
+  if [[ "${GITHUB_ACTIONS:-}" == "true" && -n "${value}" ]]; then
+    printf '::add-mask::%s\n' "${value}"
+  fi
+}
+
 has_version() {
   local cmd=$1 expected=$2
   [[ -x "${bin}/${cmd}" ]] || return 1
@@ -134,11 +143,13 @@ if [[ ! -f "${grafana_enc}" ]]; then
   chmod 600 "${gplain}"
   printf '%s\n' 'apiVersion: v1' 'kind: Secret' 'metadata:' '  name: grafana-admin' \
     '  namespace: monitoring' 'type: Opaque' 'stringData:' '  admin-user: "admin"' >"${gplain}"
-  printf '  admin-password: "%s"\n' "$(openssl rand -hex 16)" >>"${gplain}"
+  grafana_password="$(openssl rand -hex 16)"
+  mask_actions "${grafana_password}"
+  printf '  admin-password: "%s"\n' "${grafana_password}" >>"${gplain}"
   (cd "${root}" && SOPS_AGE_KEY_FILE="${key_file}" sops --config "${sops_config}" --encrypt --in-place "${gplain}") \
     || { rm -f "${gplain}"; die "sops не зашифровал пароль Grafana"; }
   mv "${gplain}" "${grafana_enc}"
-  echo "Зашифрован ${grafana_enc} (пароль Grafana случайный, показывает make status)."
+  echo "Зашифрован ${grafana_enc} (пароль Grafana случайный, в лог не пишется: SHOW_SECRETS=1 make status)."
 fi
 
 if [[ -f "${enc_file}" ]]; then
@@ -171,6 +182,9 @@ fi
 if [[ "${password}" =~ [^[:print:]] ]]; then
   die "DEMO_PASSWORD содержит непечатные символы."
 fi
+mask_actions "${password}"
+session_secret="$(openssl rand -hex 24)"
+mask_actions "${session_secret}"
 
 mkdir -p "$(dirname "${enc_file}")"
 plain="$(mktemp "${root}/deploy/secrets/tmp.XXXXXX.enc.yaml")"
@@ -191,7 +205,7 @@ trap cleanup EXIT
     'stringData:'
   printf '  DEMO_PASSWORD: %s\n' "$(quote_scalar "${password}")"
   # Ключ подписи сессий (общий для stable и canary; ротация DEMO_PASSWORD тоже отзывает сессии).
-  printf '  SESSION_SECRET: %s\n' "$(quote_scalar "$(openssl rand -hex 24)")"
+  printf '  SESSION_SECRET: %s\n' "$(quote_scalar "${session_secret}")"
 } > "${plain}"
 
 export SOPS_AGE_KEY_FILE="${key_file}"
@@ -202,6 +216,6 @@ mv "${plain}" "${enc_file}"
 chmod 644 "${enc_file}"
 
 echo "Зашифрован ${enc_file} (пароль ${password_source})."
-echo "Пароль входа в лог не пишется: его показывает make status (читает Secret sensor-secrets)."
+echo "Пароль входа в лог не пишется. Напечатать: SHOW_SECRETS=1 make status (команда kubectl — в выводе make status)."
 echo "Приватный ключ age: ${key_file}"
 echo "Этот ключ в git не класть."

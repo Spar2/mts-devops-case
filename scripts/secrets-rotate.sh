@@ -33,10 +33,13 @@ fi
 
 password="$(openssl rand -base64 18 | tr -d '\n')"
 [[ ${#password} -eq 24 ]] || die "openssl вернул не 24 символа (${#password})."
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  printf '::add-mask::%s\n' "${password}"
+fi
 
 cd "${root}"
 sops set "${enc_rel}" '["stringData"]["DEMO_PASSWORD"]' "$(quote_scalar "${password}")"
-echo "Новый DEMO_PASSWORD записан в ${enc_rel} (в лог не печатается; показать: make status)."
+echo "Новый DEMO_PASSWORD записан в ${enc_rel} (в лог не печатается; показать: SHOW_SECRETS=1 make status)."
 
 kubectl create namespace sensor --dry-run=client -o yaml | kubectl apply -f -
 sops -d deploy/secrets/sensor-secrets.enc.yaml | kubectl apply -f -
