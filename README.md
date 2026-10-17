@@ -8,7 +8,7 @@
 
 Что есть на самом деле:
 
-- **CI (GitHub Actions, `ci.yml`).** На каждый push и pull request: линт, тесты, проверки манифестов, сборка, Trivy. Только на `main`: SBOM и push образов в приватный GHCR.
+- **CI (GitHub Actions, `ci.yml`).** На каждый push и pull request: линт, тесты, проверки манифестов, сборка, Trivy. Локально без сборки образов: `make lint` и `make test` (раздел «CI локально»). Только на `main`: SBOM и push образов в приватный GHCR.
 - **CD.** Выкладка в кластер идёт командами `make up`, `make k8s-deploy` и `make k8s-canary`: Helm `--atomic`, smoke, canary через ingress-nginx с PromQL-гейтом и автооткатом. По умолчанию образы собираются локально из того же коммита.
 - **e2e в Actions (`e2e.yml`).** На pull request в `main` (кроме правок только `*.md`/`docs/`) прогоняется только k3d. На push в `main` с тем же фильтром и вручную через `workflow_dispatch` — оба варианта, k3d и нативный k3s. Устаревший прогон того же PR отменяется; прогон `main` не прерывается. Секретов workflow не использует, образы собираются на раннере.
 - **Без CD-деплоя из Actions.** Отдельного деплоя в постоянный кластер из Actions нет: у проекта нет постоянного кластера, доступного GitHub.
@@ -35,7 +35,7 @@
 | CI: линт, тесты, сборка | `.github/workflows/ci.yml` | вкладка Actions | Зелёный прогон на GitHub (jobs lint, api, web, helm, manifests, dockerfiles, shellcheck, images) |
 | Сканирование образов | там же, `trivy-action` v0.36.0 (сканер Trivy v0.70.0), HIGH/CRITICAL; SBOM (anchore/sbom-action) на `main` | Actions → images | Trivy нашёл реальные CVE (Starlette, OpenSSL в alpine), исправлено обновлением, прогон зелёный |
 | Публикация в registry | там же, push в `ghcr.io/spar2/mts-devops-case/*` только из `main` | Actions → images → Push images | Шаг выполняется в зелёном прогоне |
-| Проверка манифестов | job `manifests` (kubeconform 0.6.7), `dockerfiles` (hadolint), `shellcheck` | Actions | Зелёные; локально воспроизведено |
+| Проверка манифестов | `scripts/lint-manifests.sh` (kubeconform 0.6.7: stable, canary, два манифеста мониторинга), hadolint 2.12.0, shellcheck 0.10.0 | `make lint` | Проверено локально: `make lint` код 0. Сломанный YAML и скрипт с ошибкой shellcheck дают ненулевой код (правки откачены). Job `manifests` вызывает тот же скрипт |
 | CD: Helm + откат | `deploy/helm/sensor-gateway`, `scripts/deploy.sh` (`--atomic` + smoke + `helm rollback`) | `make k8s-rollback-demo` | Проверено: битый тег → откат `--atomic`; провал smoke → `helm rollback` (лог `docs/cd-demo-log.md`) |
 | CD: canary через ingress | `scripts/canary.sh` (вес 10→50→100, smoke + PromQL: `up`, трафик и доля 5xx canary по метрикам ingress-nginx) | `make k8s-canary` | Проверено: успешный canary с promote и провальный canary с автооткатом, stable не задет (`docs/cd-demo-log.md`) |
 | Сессии не теряются между stable и canary | подписанная cookie (HMAC) в `services/api/app/main.py` | тесты + запрос с cookie от stable в canary | Проверено: 200 на canary с cookie, выданной stable |
@@ -115,7 +115,7 @@ flowchart LR
 | Terraform / провайдер | проверено на 1.9.8 / dmacvicar/libvirt 0.8.3; в `versions.tf` ограничения `>= 1.6` и `~> 0.8.1`, lock-файла нет |
 | cloud-init | схема проверена cloud-init 25.1 |
 | Локальная LLM (опц.) | llama.cpp server `b11681`, модель Ternary-Bonsai-2-4B Q2_0 (Apache-2.0), promtool из `prom/prometheus:v2.54.1` |
-| GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0` (Trivy v0.70.0), `anchore/sbom-action@v0.17.8`, kubeconform 0.6.7, `hadolint/hadolint-action@v3.1.0`, shellcheck (из образа раннера) |
+| GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0` (Trivy v0.70.0), `anchore/sbom-action@v0.17.8`, kubeconform 0.6.7, hadolint 2.12.0 (`hadolint/hadolint-action@v3.1.0`, порог error), shellcheck 0.10.0 |
 | Приёмник алертов | `mendhak/http-https-echo:34` |
 
 Только открытые чарты из публичных репозиториев, версии зафиксированы.
@@ -191,6 +191,29 @@ make down                # удалить кластер (и Compose-демо, �
 - Образы из GHCR (их пушит CI из `main`): пакеты приватные, как и репозиторий. `GHCR_USER=… GHCR_TOKEN=<PAT read:packages> make ghcr-secret`
   создаёт pull-secret `ghcr`, затем `make k8s-deploy-ghcr TAG=<sha>`. Создание секрета и шаблон чарта проверены, вытягивание из
   приватного GHCR в кластере — нет. Путь по умолчанию (локальная сборка) от GHCR не зависит.
+
+### CI локально
+
+`make lint` и `make test` повторяют проверки CI без кластера и без push. Сборка образов, Trivy и SBOM (job `images`) в эти цели не входят.
+
+```bash
+make lint
+make test
+```
+
+`make lint` — jobs `lint`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff check llm` из job `llm`:
+
+- ruff 0.8.4: `ruff check services/api` и `ruff check llm`. Бинарь этой версии из PATH, иначе образ `ghcr.io/astral-sh/ruff:0.8.4`;
+- Helm v3.16.3: `helm lint` и `helm template` чарта (`deploy/helm/sensor-gateway`, namespace `sensor`);
+- kubeconform 0.6.7: `scripts/lint-manifests.sh` (его же вызывает job `manifests`) — stable, canary (`track=canary`, вес 10, api-versions `monitoring.coreos.com/v1` и `monitoring.coreos.com/v1/ServiceMonitor`) и файлы `deploy/monitoring/dashboard-configmap.yaml`, `prometheusrule.yaml`. Флаги: `-strict -summary -kubernetes-version 1.31.0`, схемы default и CRDs-catalog;
+- hadolint 2.12.0 с `--failure-threshold error` для `services/api/Dockerfile` и `apps/web/Dockerfile` (в CI это `hadolint/hadolint-action@v3.1.0`);
+- shellcheck 0.10.0 для `scripts/*.sh`.
+
+Если ruff, hadolint или shellcheck нужной версии нет в PATH, нужен Docker (`hadolint/hadolint:v2.12.0`, `koalaman/shellcheck:v0.10.0`). Helm и kubeconform без sudo ставятся в `~/.local/bin`, архив сверяется sha256 (суммы в `scripts/lint-manifests.sh`). kubeconform скачивает JSON Schema, нужен исходящий HTTPS.
+
+`make test` — job `api` (pytest в `services/api`) и job `web` (`npm ci && npm run build`). Остальное из job `llm` (pytest и promtool) — `make llm-test` и `python llm/llm_gen.py validate-rule deploy/monitoring/prometheusrule.yaml`.
+
+Проверено локально: `make lint` завершился с кодом 0. Невалидный YAML в `deploy/monitoring/prometheusrule.yaml` и синтаксическая ошибка в `scripts/smoke.sh` дают ненулевой код; оба файла возвращены как были.
 
 ### Как работает CD
 
@@ -369,6 +392,7 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; `
 ## Troubleshooting
 
 - `make: command not found` — выполнить строку подготовки Ubuntu из «Как запустить».
+- `make lint` не тянет образ или схему kubeconform — нужен Docker в PATH и исходящий HTTPS. Helm v3.16.3 и kubeconform 0.6.7 при отсутствии нужной версии ставятся в `~/.local/bin` без sudo.
 - Порт 8081 (k3d) или 8080 (`make demo`) занят — остановить другой процесс.
 - API не проходит healthcheck — в `.env` пароль короче 12 символов: `docker compose logs api`.
 - После входа снова форма — открывать именно `http://127.0.0.1:8080`, не файл и не другой хост.
