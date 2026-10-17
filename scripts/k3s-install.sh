@@ -2,6 +2,7 @@
 # Idempotent cluster bootstrap.
 # Default: k3s v1.31.4+k3s1, traefik off, ServiceLB on, kubeconfig mode 600 (копия для пользователя в ~/.kube/config, 600).
 # K3D=1: k3d cluster "mts" (rancher/k3s:v1.31.4-k3s1, host port 8081 -> LB 80).
+# K3D_LB_PORT: host port of the k3d loadbalancer (default INGRESS_PORT, else 8081).
 # Then Helm 3.16.3 if missing, and ingress-nginx 4.11.3 as a LoadBalancer
 # without hostNetwork (k3s ServiceLB publishes it).
 set -euo pipefail
@@ -159,7 +160,7 @@ install_k3d_cluster() {
       --image "${K3S_IMAGE}" \
       --k3s-arg "--disable=traefik@server:0" \
       ${K3D_EXTRA_ARGS:-} \
-      -p "${INGRESS_PORT:-8081}:80@loadbalancer" \
+      -p "${K3D_LB_PORT:-${INGRESS_PORT:-8081}}:80@loadbalancer" \
       --kubeconfig-switch-context \
       --wait
   fi
