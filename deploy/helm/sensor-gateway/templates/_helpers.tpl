@@ -36,10 +36,24 @@ server {
   location /api/ {
     proxy_pass http://{{ .Release.Name }}-api:8000;
     proxy_set_header Host {{ `$host` }};
+    proxy_set_header X-Real-IP {{ `$http_x_real_ip` }};
+    proxy_set_header X-Forwarded-For {{ `$http_x_forwarded_for` }};
   }
-  location = /health { proxy_pass http://{{ .Release.Name }}-api:8000/health; }
-  location = /ready { proxy_pass http://{{ .Release.Name }}-api:8000/ready; }
-  location = /metrics { proxy_pass http://{{ .Release.Name }}-api:8000/metrics; }
+  location = /health {
+    proxy_pass http://{{ .Release.Name }}-api:8000/health;
+    proxy_set_header Host {{ `$host` }};
+    proxy_set_header X-Real-IP {{ `$http_x_real_ip` }};
+    proxy_set_header X-Forwarded-For {{ `$http_x_forwarded_for` }};
+  }
+  location = /ready {
+    proxy_pass http://{{ .Release.Name }}-api:8000/ready;
+    proxy_set_header Host {{ `$host` }};
+    proxy_set_header X-Real-IP {{ `$http_x_real_ip` }};
+    proxy_set_header X-Forwarded-For {{ `$http_x_forwarded_for` }};
+  }
+  location = /metrics {
+    return 403;
+  }
   location / {
     try_files {{ `$uri $uri/ /index.html` }};
   }

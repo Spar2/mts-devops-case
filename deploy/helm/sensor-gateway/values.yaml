@@ -24,6 +24,9 @@ env:
   # The string "true" or "false". The API compares SECURE_COOKIES to "true".
   # localtest.me is plain HTTP, so cookies must not be marked Secure.
   secureCookies: "false"
+  # The API trusts X-Real-IP / X-Forwarded-For only from these networks.
+  # k3s defaults: pod CIDR and service CIDR. Web pods are in the pod CIDR.
+  trustedProxyCidrs: "10.42.0.0/16,10.43.0.0/16"
 
 ingress:
   host: sensor.localtest.me

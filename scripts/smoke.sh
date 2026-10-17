@@ -150,14 +150,44 @@ check_ready() {
 }
 
 check_metrics() {
-  local status
+  local status deploy body
   status="$(curl_status "${BASE_URL}/metrics")"
-  # "service_up 1" as its own sample. Do not treat "service_up 10" as up.
-  if [[ "$status" == "200" ]] && grep -Eq 'service_up 1([^0-9]|$)' "$body_file"; then
-    pass "metrics contains service_up 1"
+  # Ingress (and web nginx) must not publish /metrics. 404 is accepted if the
+  # path is simply not routed. The body is read from the API pod, which is
+  # what ServiceMonitor scrapes.
+  if [[ "$status" == "403" || "$status" == "404" ]]; then
+    pass "ingress /metrics HTTP ${status}"
+  else
+    fail "ingress /metrics: HTTP ${status}, expected 403 or 404"
+  fi
+  if [[ "${X_CANARY:-}" == "always" ]]; then
+    deploy="sensor-canary-api"
+  else
+    deploy="sensor-api"
+  fi
+  if ! command -v kubectl >/dev/null 2>&1; then
+    fail "metrics: kubectl is required to read /metrics on ${deploy}"
     return 0
   fi
-  fail "metrics: HTTP ${status}, expected body to contain service_up 1"
+  if ! body="$(
+    kubectl -n sensor exec "deploy/${deploy}" -c api -- \
+      python -c 'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8000/metrics", timeout=5).read().decode())' \
+      2>"$err_file"
+  )"; then
+    fail "metrics: kubectl exec deploy/${deploy} failed"
+    return 0
+  fi
+  # Sample line only. "service_up 1.0" counts; "service_up 10" does not.
+  if printf '%s\n' "$body" | grep -Eq '^service_up 1(\.0+)?$'; then
+    pass "metrics contains service_up 1"
+  else
+    fail "metrics: deploy/${deploy} body has no service_up 1"
+  fi
+  if printf '%s\n' "$body" | grep -qx '# TYPE http_request_duration_seconds histogram'; then
+    pass "metrics histogram http_request_duration_seconds"
+  else
+    fail "metrics: deploy/${deploy} has no http_request_duration_seconds histogram"
+  fi
 }
 
 check_service_unauth() {
@@ -185,10 +215,10 @@ load_password() {
   password="$value"
 }
 
-# FastAPI sets dts_session on POST /api/v1/auth/login.
+# FastAPI sets sensor_session on POST /api/v1/auth/login.
 session_from_headers() {
   local line value
-  line="$(grep -i -m1 '^set-cookie:[[:space:]]*dts_session=' "$hdr_file" || true)"
+  line="$(grep -i -m1 '^set-cookie:[[:space:]]*sensor_session=' "$hdr_file" || true)"
   if [[ -z "$line" ]]; then
     printf ''
     return 0
@@ -216,16 +246,16 @@ check_login() {
   token="$(session_from_headers)"
   if [[ "$status" == "200" && "$token" =~ ^[A-Za-z0-9._-]+$ ]]; then
     session="$token"
-    pass "login cookie dts_session"
+    pass "login cookie sensor_session"
     return 0
   fi
   session=""
-  fail "login: HTTP ${status}, expected 200 and cookie dts_session"
+  fail "login: HTTP ${status}, expected 200 and cookie sensor_session"
 }
 
 check_service_auth() {
   local status
-  status="$(curl_status "${BASE_URL}/api/v1/service" -H "Cookie: dts_session=${session}")"
+  status="$(curl_status "${BASE_URL}/api/v1/service" -H "Cookie: sensor_session=${session}")"
   if [[ "$status" == "200" ]]; then
     pass "GET /api/v1/service with cookie 200"
     return 0
@@ -238,7 +268,7 @@ check_probe() {
   status="$(
     curl_status "${BASE_URL}/api/v1/service/probe" \
       -X POST \
-      -H "Cookie: dts_session=${session}"
+      -H "Cookie: sensor_session=${session}"
   )"
   if [[ "$status" == "200" ]]; then
     pass "POST /api/v1/service/probe 200"

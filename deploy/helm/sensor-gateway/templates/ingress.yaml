@@ -6,12 +6,17 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "sensor-gateway.labels" . | nindent 4 }}
-  {{- if $canary }}
   annotations:
+    {{- if $canary }}
     nginx.ingress.kubernetes.io/canary: "true"
     nginx.ingress.kubernetes.io/canary-weight: {{ .Values.canary.weight | quote }}
     nginx.ingress.kubernetes.io/canary-by-header: "X-Canary"
-  {{- end }}
+    {{- else }}
+    nginx.ingress.kubernetes.io/server-snippet: |
+      location = /metrics {
+        return 403;
+      }
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className | quote }}
   rules:
