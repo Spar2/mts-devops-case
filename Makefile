@@ -12,7 +12,7 @@ demo:
 	@echo "Стенд: http://127.0.0.1:8080  логин demo, пароль из .env"
 
 demo-down:
-	docker compose down
+	@if [ -f .env ]; then docker compose down; else echo "demo-down: .env нет, Compose-стенд не запускался"; fi
 
 down: k8s-down demo-down
 
