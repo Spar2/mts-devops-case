@@ -8,7 +8,7 @@
 ./scripts/monitoring-install.sh
 ```
 
-Grafana: http://grafana.localtest.me:8081 в режиме k3d, :80 при `K3D=0` (`localtest.me` указывает на 127.0.0.1). Логин `admin`, случайный пароль печатает `make status`: он лежит в SOPS-файле `deploy/secrets/grafana-admin.enc.yaml`, в кластер попадает Secret `grafana-admin` (`grafana.admin.existingSecret`). Смена пароля — `scripts/grafana-rotate.sh`. Дашборд `sensor-gateway` лежит в ConfigMap с меткой `grafana_dashboard: "1"`, sidecar подхватывает его сам.
+Grafana: http://grafana.localtest.me:8081 в режиме k3d, :80 при `K3D=0` (`localtest.me` указывает на 127.0.0.1). Логин `admin`, случайный пароль в лог не пишется: `make status` печатает команду `kubectl`, само значение — `SHOW_SECRETS=1 make status`. Пароль лежит в SOPS-файле `deploy/secrets/grafana-admin.enc.yaml`, в кластер попадает Secret `grafana-admin` (`grafana.admin.existingSecret`). Смена пароля — `scripts/grafana-rotate.sh`. Дашборд `sensor-gateway` лежит в ConfigMap с меткой `grafana_dashboard: "1"`, sidecar подхватывает его сам.
 
 ## Зачем эти метрики
 

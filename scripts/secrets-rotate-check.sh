@@ -19,6 +19,10 @@ check() { if [[ "$2" == "$3" ]]; then echo "PASS $1 ($2)"; else echo "FAIL $1: g
 failed=0
 
 old_pw="$(pw)"
+# Строку обрабатывает только раннер Actions (локальный CI=true пароль не печатает).
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  printf '::add-mask::%s\n' "${old_pw}"
+fi
 read -r st old_cookie < <(login "${old_pw}")
 check "вход со старым паролем до ротации" "${st}" 200
 check "старая cookie до ротации" "$(c -o /dev/null -w '%{http_code}' -H "Cookie: sensor_session=${old_cookie}" "${base}/api/v1/service")" 200
@@ -26,6 +30,9 @@ check "старая cookie до ротации" "$(c -o /dev/null -w '%{http_cod
 "${root}/scripts/secrets-rotate.sh" >/dev/null
 for _ in $(seq 1 30); do [[ "$(c -o /dev/null -w '%{http_code}' "${base}/ready")" == 200 ]] && break; sleep 2; done
 new_pw="$(pw)"
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  printf '::add-mask::%s\n' "${new_pw}"
+fi
 if [[ "${new_pw}" != "${old_pw}" ]]; then echo "PASS пароль в Secret сменился"; else echo "FAIL пароль не сменился"; failed=1; fi
 
 read -r st _ < <(login "${old_pw}")

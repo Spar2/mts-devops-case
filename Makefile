@@ -1,7 +1,9 @@
-.PHONY: ghcr-secret k8s-deploy-ghcr up down demo demo-down test logs status k8s-up k8s-images k8s-deploy k8s-canary k8s-canary-fail k8s-rollback-demo k8s-alert-demo k8s-netpol-check k8s-rotate-demo k8s-down lint lint-ruff lint-tools lint-helm lint-manifests lint-dockerfiles lint-shellcheck
+.PHONY: ghcr-secret k8s-deploy-ghcr up down demo demo-down test logs status k8s-up k8s-images k8s-deploy k8s-canary k8s-canary-fail k8s-rollback-demo k8s-alert-demo k8s-netpol-check k8s-rotate-demo k8s-down lint lint-ruff lint-tools lint-helm lint-manifests lint-dockerfiles lint-shellcheck lint-deploy-rollback
 
 # Полное решение за 3 команды (git clone, cd, make up): k3d-кластер (k3s v1.31.4 в Docker) + ingress-nginx +
-# SOPS-секрет + kube-prometheus-stack + Helm-релиз + smoke. Нужен только Docker; ~5 минут, 8 ГБ RAM.
+# SOPS-секрет + kube-prometheus-stack + Helm-релиз + smoke. ~5 минут, 8 ГБ RAM.
+# Кроме Docker нужны git, make, curl, openssl, python3, sha256sum, tar и sudo
+# (helm/kubectl/k3d в /usr/local/bin и при необходимости строка в /etc/hosts).
 # Нативный k3s на хосте (ВМ, OpenStack-инстанс): make up K3D=0 (нужен sudo).
 up: k8s-up status
 
@@ -30,7 +32,7 @@ RUFF_IMAGE ?= ghcr.io/astral-sh/ruff:0.8.4
 HADOLINT_IMAGE ?= hadolint/hadolint:v2.12.0
 SHELLCHECK_IMAGE ?= koalaman/shellcheck:v0.10.0
 
-lint: lint-ruff lint-helm lint-manifests lint-dockerfiles lint-shellcheck
+lint: lint-ruff lint-helm lint-manifests lint-dockerfiles lint-shellcheck lint-deploy-rollback
 
 # ruff 0.8.4: services/api (job lint) и каталог llm (job llm).
 lint-ruff:
@@ -85,14 +87,22 @@ lint-shellcheck:
 	  docker run --rm -v "$(CURDIR):/mnt" -w /mnt "$(SHELLCHECK_IMAGE)" scripts/*.sh; \
 	fi
 
+# Откат deploy.sh: 0/1 ревизия, битый history, ошибка helm rollback/uninstall.
+# Заглушки helm и kubectl в PATH, кластер не нужен. В job shellcheck CI этого шага нет.
+lint-deploy-rollback:
+	./scripts/test-deploy-rollback.sh
+
 # Полный контур: k3s + ingress-nginx + SOPS-секрет + kube-prometheus-stack + Helm-релиз.
 TAG ?= $(shell git rev-parse --short=7 HEAD)
 PREFIX ?= ghcr.io/spar2/mts-devops-case
 K3D ?= 1
+# Имя k3d-кластера. Уже существующий кластер не пересоздаётся: k3s-install.sh пишет предупреждение.
+CLUSTER ?= mts
+export CLUSTER
 ifeq ($(K3D),1)
 export INGRESS_PORT ?= 8081
 export KUBECONFIG ?= $(HOME)/.kube/config
-IMPORT_CMD = k3d image import -c mts
+IMPORT_CMD = k3d image import -c $(CLUSTER)
 else
 export KUBECONFIG ?= $(HOME)/.kube/config
 export INGRESS_PORT ?= 80
@@ -143,12 +153,32 @@ k8s-canary:
 k8s-rollback-demo:
 	./scripts/rollback-demo.sh
 
+# Пароль в лог не пишется. Команда чтения — всегда; само значение только при
+# SHOW_SECRETS=1 и не в CI (GitHub Actions задаёт CI=true, make up вызывает status).
 status:
 	@echo
-	@echo "Приложение: http://sensor.localtest.me:$(INGRESS_PORT)  логин demo, пароль:"
-	@kubectl -n sensor get secret sensor-secrets -o jsonpath='{.data.DEMO_PASSWORD}' | base64 -d; echo
-	@echo "Grafana:    http://grafana.localtest.me:$(INGRESS_PORT)  логин admin, пароль (дашборд sensor-gateway):"
-	@kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo
+	@echo "Приложение: http://sensor.localtest.me:$(INGRESS_PORT)  логин demo"
+	@if [ "$${CI:-}" = "true" ]; then \
+	  echo "Пароль в лог не печатается (CI=true)."; \
+	  echo "  kubectl -n sensor get secret sensor-secrets -o jsonpath='{.data.DEMO_PASSWORD}' | base64 -d; echo"; \
+	elif [ "$${SHOW_SECRETS:-}" = "1" ]; then \
+	  printf '%s' "Пароль: "; \
+	  kubectl -n sensor get secret sensor-secrets -o jsonpath='{.data.DEMO_PASSWORD}' | base64 -d; echo; \
+	else \
+	  echo "Пароль не печатается. Напечатать значение: SHOW_SECRETS=1 make status"; \
+	  echo "  kubectl -n sensor get secret sensor-secrets -o jsonpath='{.data.DEMO_PASSWORD}' | base64 -d; echo"; \
+	fi
+	@echo "Grafana:    http://grafana.localtest.me:$(INGRESS_PORT)  логин admin (дашборд sensor-gateway)"
+	@if [ "$${CI:-}" = "true" ]; then \
+	  echo "Пароль в лог не печатается (CI=true)."; \
+	  echo "  kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo"; \
+	elif [ "$${SHOW_SECRETS:-}" = "1" ]; then \
+	  printf '%s' "Пароль: "; \
+	  kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo; \
+	else \
+	  echo "Пароль не печатается. Напечатать значение: SHOW_SECRETS=1 make status"; \
+	  echo "  kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo"; \
+	fi
 	@echo "Демо: make k8s-canary | make k8s-canary-fail | make k8s-rollback-demo | make k8s-rotate-demo | make k8s-alert-demo"
 
 k8s-canary-fail:
@@ -165,7 +195,7 @@ k8s-rotate-demo:
 
 ifeq ($(K3D),1)
 k8s-down:
-	-k3d cluster delete mts
+	-k3d cluster delete $(CLUSTER)
 else
 k8s-down:
 	-helm uninstall sensor-canary -n sensor

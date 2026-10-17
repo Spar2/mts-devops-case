@@ -1,14 +1,19 @@
 variable "repo_url" {
-  description = "HTTPS URL репозитория. cloud-init клонирует его на ВМ."
+  description = "URL репозитория для clone на ВМ. По умолчанию публичный HTTPS без секрета. С github_deploy_key_path нужен SSH URL (git@github.com:org/repo.git или ssh://)."
   type        = string
   default     = "https://github.com/Spar2/mts-devops-case.git"
 }
 
-variable "github_token" {
-  description = "Токен GitHub для приватного репозитория. Пустая строка — clone без токена. Не коммитить."
+variable "github_deploy_key_path" {
+  description = "Необязательный абсолютный путь на хосте Terraform к приватному deploy-key (OpenSSH). Пустая строка — clone repo_url по HTTPS без секрета. Ключ не коммитить. cloud-init удаляет файл ключа с ВМ после clone."
   type        = string
   sensitive   = true
   default     = ""
+
+  validation {
+    condition     = var.github_deploy_key_path == "" || (startswith(var.github_deploy_key_path, "/") && !strcontains(var.github_deploy_key_path, "\n"))
+    error_message = "github_deploy_key_path — абсолютный путь без перевода строки, либо пустая строка."
+  }
 }
 
 variable "ssh_public_key" {
