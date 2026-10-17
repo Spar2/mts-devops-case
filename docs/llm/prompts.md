@@ -61,3 +61,42 @@ TASK D (secrets). Use SOPS 3.9.2 + age 1.2.1. Create: .sops.yaml (creation_rules
 ```text
 TASK E (monitoring). Create deploy/monitoring/: values-kube-prometheus-stack.yaml for chart prometheus-community/kube-prometheus-stack 65.1.1, trimmed for a single small node (disable kubeEtcd, kubeControllerManager, kubeScheduler, kubeProxy scraping; nodeExporter on; alertmanager enabled with small resources; grafana admin password from existing secret or "admin" note for demo; grafana sidecar dashboards enabled with label grafana_dashboard: "1"; prometheus retention 1d, resources limits ~ 1Gi; serviceMonitorSelectorNilUsesHelmValues false, ruleSelectorNilUsesHelmValues false; grafana ingress host grafana.localtest.me className nginx). dashboard-configmap.yaml: ConfigMap in ns monitoring label grafana_dashboard "1" with a Grafana dashboard JSON "sensor-gateway" panels: service_up (stat), rate(http_requests_total[1m]) (timeseries), service_probe_latency_seconds (timeseries), up{job=~".*sensor.*api.*"}. prometheusrule.yaml: PrometheusRule ns monitoring label release: mon, group sensor-gateway, alerts SensorGatewayDown (expr: absent(service_up{namespace="sensor"}) or max(service_up{namespace="sensor"}) < 1 ... use `(sum(up{namespace="sensor", service=~".*-api"}) or vector(0)) == 0` for 1m, severity critical) and SensorGatewaySlowProbe (service_probe_latency_seconds > 0.5 for 5m, warning), with summary/description annotations in Russian. scripts/monitoring-install.sh: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts, helm upgrade --install mon prometheus-community/kube-prometheus-stack --version 65.1.1 -n monitoring --create-namespace -f values ... --wait --timeout 10m, then kubectl apply dashboard and rule. Plus deploy/monitoring/README.md (Russian, short: why this metric, how to see alert firing: scale api deployment to 0 and watch Prometheus /alerts). Only touch deploy/monitoring/ and scripts/monitoring-install.sh.
 ```
+
+---
+
+# Вторая волна (4 параллельные сессии, та же модель)
+
+Общий контекст второй волны:
+
+```text
+Repo /workspace/mts-devops-case (MTS hackathon case 1: DevOps pipeline). Already present: services/api (FastAPI sensor-gateway, app/main.py, tests/), apps/web, Helm chart deploy/helm/sensor-gateway (releases "sensor" stable and "sensor-canary", ns sensor, Secret sensor-secrets key DEMO_PASSWORD), scripts/{k3s-install.sh,deploy.sh,smoke.sh,canary.sh,rollback-demo.sh,secrets-*.sh,monitoring-install.sh}, deploy/monitoring (kube-prometheus-stack 65.1.1 release "mon" ns monitoring), Makefile targets up/k8s-up/k8s-deploy/k8s-canary, .github/workflows/ci.yml. Read relevant files first. Write ONLY the files assigned to you; do not run git; do not touch other files. Keep changes small and pinned. When done print the list of changed files and what you verified.
+```
+
+## S — stateless-сессии для stable и canary
+
+```text
+Replace the in-memory session dict with a signed stateless cookie: token = base64url(json{u,exp}) + "." + HMAC-SHA256 signature. Signing key derived from env SESSION_SECRET (optional, >=16 chars) combined with the current DEMO_PASSWORD, so rotating DEMO_PASSWORD invalidates all old sessions, and any pod with the same secret accepts the cookie. Use time.time() for exp, constant-time compare, reject malformed tokens with 401. Keep cookie name dts_session, HttpOnly, SameSite=Strict, all routes and existing tests green; add tests: cookie from one app instance accepted by a second instance; rejected after DEMO_PASSWORD changes; tampered token rejected. Add optional env SESSION_SECRET (secretKeyRef optional: true) to the chart api Deployment.
+```
+
+## I — cloud-init и Terraform
+
+```text
+Create infra/cloud-init/user-data.yaml.tftpl (#cloud-config for Ubuntu 24.04: git make curl docker.io docker-compose-v2, user in docker group, runcmd: git clone of templated repo URL (private repo: token via Terraform templatefile, never hardcoded), then `make k8s-up` as the user, logs to /var/log/mts-k8s-up.log) and a rendered user-data.example.yaml for schema validation. infra/terraform/ for dmacvicar/libvirt ~> 0.8.1: one Ubuntu 24.04 cloud-image VM (4 vCPU, 8 GiB, 30 GiB) with cloud-init disk. variables.tf, outputs.tf, versions.tf (terraform >= 1.6), infra/README.md. Install terraform 1.9.8, run terraform init -backend=false && terraform validate; run cloud-init schema. Report actual results.
+```
+
+## K — проверки манифестов в CI
+
+```text
+Add CI job "manifests": helm template (stable and canary variants) validated by kubeconform v0.6.7 -strict -summary -kubernetes-version 1.31.0 with default + datreeio CRDs-catalog schema locations; validate deploy/monitoring/dashboard-configmap.yaml and prometheusrule.yaml. Job "dockerfiles": hadolint/hadolint-action@v3.1.0, failure-threshold error. Job shellcheck: shellcheck scripts/*.sh. Reproduce locally with kubeconform/hadolint binaries; fix only real errors.
+```
+
+## C2 — canary с анализом и автооткатом
+
+```text
+Rewrite scripts/canary.sh: for each weight step (default 10 50 100) helm upgrade --install sensor-canary with track=canary, canary.enabled=true, canary.weight=W (+ CANARY_HELM_ARGS), then analysis: (1) smoke.sh with X_CANARY=always; (2) Prometheus gate via PROM_URL: min(up{namespace="sensor",service="sensor-canary-api"}) == 1 and sum(rate(http_requests_total{...}[1m])) > 0 after a little load and ANALYSIS_WAIT_S. On any failure: weight 0, helm uninstall sensor-canary, print "ROLLBACK canary: <reason>", exit 1 — stable untouched. On success promote via deploy.sh and uninstall canary. Timestamps on each step. scripts/canary-fail-demo.sh: canary with --set existingSecret=sensor-secrets-wrong (pods start but smoke login fails) -> automatic rollback; show helm list and smoke stable.
+```
+
+Ручные правки после второй волны: окно `rate` увеличено до `[2m]` и ожидание до 75 с (при scrape 30 с окно 1m
+давало пустой ответ — найдено в реальном прогоне); smoke не принимал точку в подписанной cookie; Ansible
+переписан в обёртку над `make k8s-up` (версия модели дублировала логику и обходила SOPS);
+секрет применялся без перезапуска подов — добавлен `rollout restart` при изменении.

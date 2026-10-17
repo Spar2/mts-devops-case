@@ -1,24 +1,39 @@
 # Облачный DevOps-конвейер: от репозитория до production-Kubernetes за 3 команды
 
-Кейс 1 хакатона МТС. Демо-служба `sensor-gateway` (FastAPI) и веб-интерфейс из трёх окон
-проходят путь: push в `main` → линт, тесты, сборка, Trivy → образы в GHCR → Helm-релиз в k3s
-с canary через ingress-nginx и автоматическим откатом → метрики, дашборд и алерт в Prometheus/Grafana.
+Кейс 1 хакатона МТС. Демо-служба `sensor-gateway` (FastAPI) и веб-интерфейс из трёх окон проходят путь:
+push в `main` → линт, тесты, проверки манифестов, сборка, Trivy → образы в GHCR → Helm-релиз в k3s с canary
+через ingress-nginx и автоматическим откатом по smoke и метрикам → дашборд и алерт в Prometheus/Grafana/Alertmanager.
 
 ## Проблема
 
-Проверяющему нужно у себя на Ubuntu короткой командой поднять сервис и увидеть весь конвейер:
-сборку образа, выкладку, откат при неудачном релизе, секреты вне git и наблюдаемость.
-Полный продукт для этого слишком большой, поэтому в репозитории только одна служба и три окна.
-Расчёты, очереди, БД и остальной контур платформы сюда сознательно не входят.
+Проверяющему нужно у себя на Ubuntu короткой командой поднять сервис и увидеть весь конвейер: сборку образа,
+выкладку, откат неудачного релиза, секреты вне git и наблюдаемость. Полный продукт для этого слишком большой,
+поэтому в репозитории одна служба и три окна (`/`, `/login`, `/service`). Расчёты, очереди, БД и остальной
+контур платформы сюда сознательно не входят.
 
 ## Цель
 
-1. Инфраструктура как код: k3s ставится скриптом или Ansible-плейбуком.
-2. CI: ruff, pytest, сборка интерфейса, сборка образов, Trivy, push в `ghcr.io/spar2/mts-devops-case/*` по push в `main`.
-3. CD: Helm-чарт, canary через ingress-nginx, `helm --atomic` + smoke-check с `helm rollback`.
-4. Секреты: SOPS + age, описанная ротация.
-5. Мониторинг: kube-prometheus-stack, дашборд `sensor-gateway` и алерты.
-6. Видео до 5 минут (требования ниже).
+Воспроизводимый конвейер из открытых инструментов с зафиксированными версиями, где каждое требование кейса
+можно проверить командой и где есть лог реальной проверки.
+
+### Требования кейса → реализация → проверка
+
+| Требование | Где лежит | Как проверить | Статус проверки |
+| --- | --- | --- | --- |
+| Запуск ≤ 3 командами | `Makefile` (`make up`) | `git clone … && cd mts-devops-case && make up` | Проверено свежим клоном на box: вход, probe, 401 без cookie, `/metrics` |
+| IaC: кластер | `scripts/k3s-install.sh`, `infra/ansible/site.yml` | `make k8s-up` / `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` | Проверено в режиме k3d (k3s v1.31.4) с чистого старта, лог `docs/k8s-up-log.md`; плейбук прогнан, `failed=0`. Нативный k3s на box не ставился (см. «Что не проверено») |
+| IaC: ВМ | `infra/cloud-init/`, `infra/terraform/` (libvirt) | `terraform validate`, `cloud-init schema` | Валидация проходит. `terraform apply` на box не доведён (см. «Что не проверено») |
+| CI: линт, тесты, сборка | `.github/workflows/ci.yml` | вкладка Actions | Зелёный прогон на GitHub (jobs lint, api, web, helm, manifests, dockerfiles, shellcheck, images) |
+| Сканирование образов | там же, Trivy `v0.36.0`, HIGH/CRITICAL | Actions → images | Trivy нашёл реальные CVE (Starlette, OpenSSL в alpine), исправлено обновлением, прогон зелёный |
+| Публикация в registry | там же, push в `ghcr.io/spar2/mts-devops-case/*` только из `main` | Actions → images → Push images | Шаг выполняется в зелёном прогоне |
+| Проверка манифестов | job `manifests` (kubeconform 0.6.7), `dockerfiles` (hadolint), `shellcheck` | Actions | Зелёные; локально воспроизведено |
+| CD: Helm + откат | `deploy/helm/sensor-gateway`, `scripts/deploy.sh` (`--atomic` + smoke + `helm rollback`) | `make k8s-rollback-demo` | Проверено: битый тег → откат `--atomic`; провал smoke → `helm rollback` (лог `docs/cd-demo-log.md`) |
+| CD: canary через ingress | `scripts/canary.sh` (вес 10→50→100, smoke + Prometheus `up`/`rate`) | `make k8s-canary` | Проверено: успешный canary с promote и провальный canary с автооткатом, stable не задет (`docs/cd-demo-log.md`) |
+| Сессии не теряются между stable и canary | подписанная cookie (HMAC) в `services/api/app/main.py` | тесты + запрос с cookie от stable в canary | Проверено: 200 на canary с cookie, выданной stable |
+| Секреты вне git | SOPS 3.9.2 + age 1.2.1, `scripts/secrets-*.sh`, `deploy/secrets/README.md` | `scripts/secrets-rotate-check.sh` | Проверено: после ротации старый пароль и старая cookie → 401, новый пароль → 200 (`docs/secrets-rotation-log.md`) |
+| Мониторинг: дашборд | `deploy/monitoring/` (kube-prometheus-stack 65.1.1) | Grafana → дашборд `sensor-gateway` | Проверено в k3d, скриншот `docs/img/grafana-sensor-gateway.png` |
+| Мониторинг: алерт | `deploy/monitoring/prometheusrule.yaml` | `kubectl -n sensor scale deploy sensor-api --replicas=0` | Проверено: `SensorGatewayDown` firing в Prometheus и в Alertmanager (`docs/monitoring-alert-proof.md`, скриншоты) |
+| Видео ≤ 5 мин | `docs/demo-script.md` | — | Сценарий готов, ролик снимает команда |
 
 ## Команда
 
@@ -34,56 +49,69 @@
 
 ```mermaid
 flowchart LR
-  dev[git push main] --> ci[GitHub Actions: ruff, pytest, npm build, docker build, Trivy]
-  ci -->|push по main| ghcr[(ghcr.io/spar2/mts-devops-case)]
-  subgraph k3s[k3s, один узел]
+  dev[git push main] --> ci[GitHub Actions: ruff, pytest, npm build, kubeconform, hadolint, shellcheck, docker build, Trivy]
+  ci -->|push только из main| ghcr[(ghcr.io/spar2/mts-devops-case)]
+  tf[Terraform libvirt + cloud-init] -.->|ВМ Ubuntu 24.04| k3s
+  subgraph k3s[k3s v1.31.4, один узел]
     ing[ingress-nginx 4.11.3]
     subgraph ns[namespace sensor]
       web[sensor-web nginx] --> api[sensor-api FastAPI]
       cweb[sensor-canary-web] --> capi[sensor-canary-api]
     end
-    sec[Secret sensor-secrets из SOPS] -.-> api
+    sec[Secret sensor-secrets из SOPS+age] -.-> api
     sec -.-> capi
     subgraph mon[namespace monitoring]
       prom[Prometheus] --> graf[Grafana: дашборд sensor-gateway]
-      prom --> am[Alertmanager]
+      prom --> am[Alertmanager: SensorGatewayDown]
     end
     prom -->|ServiceMonitor /metrics| api
+    prom -->|ServiceMonitor /metrics| capi
   end
-  ghcr -.->|helm upgrade --atomic| ns
+  cd[deploy.sh / canary.sh: helm --atomic, smoke, PromQL-гейт, rollback] --> ns
+  cd -->|PromQL up, rate| prom
   user[Браузер] --> ing
   ing -->|stable| web
-  ing -->|canary-weight / X-Canary| cweb
+  ing -->|canary-weight или X-Canary: always| cweb
 ```
 
-Compose-режим проще: браузер → nginx (`web`, порт 8080) → `api:8000`. Nginx отдаёт интерфейс и
-проксирует `/api`, `/health`, `/ready`, `/metrics`. Cookie `dts_session` ставит API (`HttpOnly`, `SameSite=Strict`).
-Маршруты интерфейса: `/`, `/login`, `/service`.
-
-В Kubernetes nginx-конфиг web подменяется ConfigMap'ом чарта: каждый релиз (stable и canary) проксирует
-в свой Service `<release>-api`.
+- Compose-режим (`make up`): браузер → nginx `web` (127.0.0.1:8080) → `api:8000`. Nginx отдаёт интерфейс и
+  проксирует `/api`, `/health`, `/ready`, `/metrics`.
+- В Kubernetes nginx-конфиг web подменяется ConfigMap'ом чарта: каждый релиз проксирует в свой Service `<release>-api`.
+- Сессия — подписанная cookie `dts_session` (HMAC-SHA256, `HttpOnly`, `SameSite=Strict`). Ключ выводится из
+  `SESSION_SECRET` и `DEMO_PASSWORD`, поэтому stable и canary принимают одну cookie, а ротация пароля отзывает все сессии.
 
 ## Инструменты
 
 | Инструмент | Версия |
 | --- | --- |
-| Python / FastAPI / Uvicorn | 3.12 (`python:3.12-slim-bookworm`) / 0.143.3 (Starlette 1.8.0) / 0.34.0 |
+| Python / FastAPI / Starlette / Uvicorn | 3.12 (`python:3.12-slim-bookworm`) / 0.143.3 / 1.8.0 / 0.34.0 |
 | Node.js / Vite / React | 24 / 8 / 19 |
 | nginx | 1.29-alpine + `apk upgrade` |
-| Docker Compose | V2 (проверено на 2.30.3) |
-| GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0` (HIGH, CRITICAL) |
-| k3s | v1.31.4+k3s1, traefik отключён (локально проверено в k3d v5.7.5) |
+| Docker / Compose | Docker 24+ с BuildKit / Compose V2 (проверено 2.30.3) |
+| k3s | v1.31.4+k3s1, traefik отключён |
+| k3d (локальный режим) | v5.7.5 |
 | Helm | v3.16.3 |
-| ingress-nginx | чарт 4.11.3 (https://kubernetes.github.io/ingress-nginx) |
-| kube-prometheus-stack | чарт 65.1.1 (https://prometheus-community.github.io/helm-charts) |
+| ingress-nginx | чарт 4.11.3, https://kubernetes.github.io/ingress-nginx |
+| kube-prometheus-stack | чарт 65.1.1, https://prometheus-community.github.io/helm-charts (Prometheus 2.54.1, Grafana 11.2.1, Alertmanager 0.27.0) |
 | SOPS / age | 3.9.2 / 1.2.1 |
-| Ansible | любой 2.15+ (плейбук `infra/ansible/site.yml`) |
+| Ansible | ansible-core 2.17 (проверено 2.17.5) |
+| Terraform / провайдер | 1.9.8 / dmacvicar/libvirt 0.8.3 (`~> 0.8.1`) |
+| cloud-init | схема проверена cloud-init 25.1 |
+| GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0`, kubeconform 0.6.7, `hadolint/hadolint-action@v3.1.0` |
 
-Все чарты открытые, из публичных репозиториев, версии зафиксированы.
+Только открытые чарты из публичных репозиториев, версии зафиксированы.
 
-## Запуск
+### Ресурсы
 
-Проверяющие работают в Ubuntu. Нужны Git, Docker и Docker Compose V2, для `make k8s-up` ещё sudo и `curl`.
+| Режим | RAM | CPU | Диск |
+| --- | --- | --- | --- |
+| `make up` (Compose) | до 2 ГБ | 1–2 vCPU | ~1 ГБ образов |
+| `make k8s-up` (k3s + мониторинг) | 8 ГБ рекомендуемо (стек занимает около 3 ГБ, лимит Prometheus 1 ГиБ), 16 ГБ с запасом | 2–4 vCPU | ~10 ГБ |
+| ВМ из `infra/terraform` | 8 ГиБ по умолчанию (`vm_memory_mib`) | 4 vCPU | 30 ГиБ |
+
+## Как запустить
+
+Проверяющие работают в Ubuntu. Нужны Git, Docker с Compose V2 и `make`; для `make k8s-up` ещё `sudo` и `curl`.
 
 Репозиторий приватный: жюри клонирует его под GitHub-аккаунтом, которому выдан доступ (HTTPS с токеном или SSH-ключ).
 
@@ -93,92 +121,121 @@ cd mts-devops-case
 make up
 ```
 
-Почему `make up` — это Compose, а не Kubernetes: эксперты на созвоне допустили Compose, а установка
-Prometheus в кластер занимает около 8 минут. Три команды должны давать работающий стенд быстро и
-предсказуемо. Полный Kubernetes-контур — отдельной целью:
+Открыть http://127.0.0.1:8080, логин `demo`, пароль `demo-stand-pass` (из `.env.example`, пароль локального стенда).
+Остановить: `make down`.
+
+**Почему `make up` — Compose.** Эксперты допустили Compose. Установка Prometheus в кластер занимает минуты, а три команды
+должны давать работающий стенд быстро и предсказуемо. Полный Kubernetes-контур — отдельной целью:
 
 ```bash
-make k8s-up            # k3s + ingress-nginx + SOPS-секрет + kube-prometheus-stack + Helm-релиз, ~10 мин
-make k8s-canary        # canary 10% → 50% с smoke на каждом шаге, затем promote
-make k8s-rollback-demo # заведомо битый тег: helm --atomic откатывает релиз, печатается helm history
+make k8s-up            # k3s + ingress-nginx (ждёт admission webhook) + SOPS-секрет + kube-prometheus-stack + Helm-релиз + smoke
+make k8s-canary        # canary 10 → 50 → 100 с smoke и PromQL-гейтом на каждом шаге, затем promote
+./scripts/canary-fail-demo.sh <tag>   # заведомо неверный секрет у canary → автоматический откат, stable не задет
+make k8s-rollback-demo # битый тег образа → helm --atomic откатывает релиз, печатается helm history
+INGRESS_PORT=80 ./scripts/secrets-rotate-check.sh   # ротация пароля end-to-end
 make k8s-down
 ```
 
-Compose: открыть http://127.0.0.1:8080, логин `demo`, пароль `demo-stand-pass` (из `.env.example`).
-Kubernetes: http://sensor.localtest.me (имя резолвится в 127.0.0.1), пароль печатает `scripts/secrets-init.sh`,
-Grafana — http://grafana.localtest.me.
+- Приложение: http://sensor.localtest.me (имя резолвится в 127.0.0.1). Пароль печатает `scripts/secrets-init.sh`
+  при первом запуске, он же лежит в Secret `sensor-secrets`.
+- Grafana: http://grafana.localtest.me (демо-доступ admin/admin — поменять перед публикацией).
+- Prometheus и Alertmanager: `kubectl -n monitoring port-forward svc/mon-kube-prometheus-stack-prometheus 9090:9090`
+  и `svc/mon-kube-prometheus-stack-alertmanager 9093:9093`.
+- `make k8s-up` собирает образы локально и импортирует их в containerd k3s: доступ к приватным пакетам GHCR не нужен.
+  Образы из CI: `make k8s-deploy TAG=<sha>` при настроенном imagePullSecret.
+- Без sudo, в Docker: `make k8s-up K3D=1` (кластер k3d `mts`, ingress на `:8081`).
+- Ansible: `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` — обёртка над `make k8s-up`.
+- ВМ: `infra/README.md` (Terraform + cloud-init, внутри ВМ выполняется `make k8s-up`).
 
-`make k8s-up` собирает образы локально и импортирует их в containerd k3s, поэтому не нужен доступ к приватным
-пакетам GHCR. Образы, которые пушит CI, используются так: `make k8s-deploy TAG=<sha>` при настроенном pull secret.
+### Как работает CD
 
-Ресурсы: Compose — два контейнера, до 2 ГБ RAM. Kubernetes-контур — ориентир 6–8 ГБ RAM, 2+ vCPU.
-
-Локальные тесты: `make test`, линт: `make lint`. Остановить Compose: `make down`.
-
-### CD: как работает откат
-
-- `scripts/deploy.sh TAG` — `helm upgrade --install --atomic --wait --timeout 3m`. Если поды не стали ready,
-  Helm сам откатывает релиз.
-- После выкладки `scripts/smoke.sh`: `/ready` 200, `/metrics` содержит `service_up 1`, `/api/v1/service` без cookie 401,
-  вход, `/api/v1/service` с cookie 200, probe 200. При провале — `helm rollback sensor 0` и выход с ошибкой.
-- `scripts/canary.sh TAG` — второй релиз `sensor-canary` с аннотациями `nginx.ingress.kubernetes.io/canary`,
-  `canary-weight` и `canary-by-header: X-Canary`. На каждом шаге веса smoke идёт с `X-Canary: always`.
-  Успех — promote в stable и удаление canary, провал — удаление canary.
+- `scripts/deploy.sh TAG` — `helm upgrade --install --atomic --wait --timeout 3m`; если поды не стали ready, Helm откатывает
+  релиз сам. Затем `scripts/smoke.sh` (`/ready`, `/metrics`, 401 без cookie, вход, `/api/v1/service`, probe); при провале
+  `helm rollback sensor 0`.
+- `scripts/canary.sh TAG` — релиз `sensor-canary` с аннотациями ingress-nginx `canary`, `canary-weight`, `canary-by-header: X-Canary`.
+  На каждом шаге: smoke через `X-Canary: always`, нагрузка, затем PromQL: `min(up{service="sensor-canary-api"}) == 1` и
+  `sum(rate(http_requests_total{service="sensor-canary-api"}[2m])) > 0`. Любой провал → вес 0, удаление canary, `ROLLBACK canary: <причина>`.
+  Успех → promote в stable через `deploy.sh`, удаление canary.
+- Stable smoke во время canary шлёт `X-Canary: never`, чтобы проверять именно stable.
 
 ## Мониторинг
 
-- `/health`, `/ready`, `/metrics` (`service_up`, `http_requests_total`, `service_probe_latency_seconds`).
-- В кластере ServiceMonitor из чарта (label `release: mon`) подключает `/metrics` к Prometheus.
-- Дашборд Grafana `sensor-gateway` (`deploy/monitoring/dashboard-configmap.yaml`): service_up, rate запросов,
-  задержка probe, `up` таргета.
-- Алерты (`deploy/monitoring/prometheusrule.yaml`): `SensorGatewayDown` (нет ни одного живого таргета API 1 мин, critical)
-  и `SensorGatewaySlowProbe` (probe > 0.5 с 5 мин, warning). Выбор метрики: `up` от Prometheus ловит и падение
-  процесса, и пропажу пода, чего `service_up` сам по себе не покажет — он всегда 1, пока процесс жив.
-- Проверить алерт: `kubectl -n sensor scale deploy sensor-api --replicas=0`, через ~1–2 мин алерт в Prometheus `/alerts`.
-- Подробнее: `deploy/monitoring/README.md`.
+- Сервис отдаёт `/health`, `/ready`, `/metrics` (`service_up`, `http_requests_total`, `service_probe_latency_seconds`).
+- ServiceMonitor из чарта (label `release: mon`) подключает `/metrics` stable и canary к Prometheus.
+- Дашборд Grafana `sensor-gateway` (`deploy/monitoring/dashboard-configmap.yaml`): service_up, rate запросов, задержка probe, `up` таргета.
+
+  ![Grafana](docs/img/grafana-sensor-gateway.png)
+
+- Алерты (`deploy/monitoring/prometheusrule.yaml`): `SensorGatewayDown` — нет ни одного живого таргета API 1 минуту (critical);
+  `SensorGatewaySlowProbe` — probe дольше 0.5 с 5 минут (warning). Почему `up`, а не `service_up`: `service_up` отдаёт сам
+  процесс, и при падении пода метрика просто исчезает; `up` выставляет Prometheus, а `or vector(0)` ловит и исчезновение ряда.
+- Проверено: после `scale --replicas=0` алерт стал pending через ~80 с и firing через ~140 с, Alertmanager его получил
+  (`docs/monitoring-alert-proof.md`, `docs/img/prometheus-alert-firing.png`, `docs/img/alertmanager-alert.png`).
+  Receiver в демо `null`: доставка в почту или мессенджер не настраивалась.
+- Скриншот дашборда снимается `scripts/grafana-screenshot.py` (Playwright + headless Chrome).
 
 ## Безопасность
 
-- Compose: `DEMO_PASSWORD` из `.env` (не в git), пример — `.env.example`. Это пароль локального стенда.
-- Kubernetes: Secret `sensor-secrets` хранится зашифрованным SOPS (age). `scripts/secrets-init.sh` генерирует ключ
-  age в `~/.config/sops/age/keys.txt` (в git не попадает) и зашифрованный `deploy/secrets/sensor-secrets.enc.yaml`.
-  У стенда жюри свой ключ, поэтому этот файл в `.gitignore`; в рабочей среде команда коммитит файл, зашифрованный
-  на ключи команды.
-- Ротация пароля: `scripts/secrets-rotate.sh` — новый пароль, `sops set`, apply, `rollout restart` API.
-  Ротация ключа age и порядок действий — `deploy/secrets/README.md`.
-- Сессия: случайный токен, в памяти SHA-256, срок 12 ч; вход не чаще 30 попыток в минуту с адреса (429).
-- CI: Trivy блокирует образ с HIGH/CRITICAL (кроме unfixed); push в GHCR только из `main`, `GITHUB_TOKEN` с `packages: write`.
-- API в кластере запускается не от root, с лимитами ресурсов.
+- Compose: `DEMO_PASSWORD` из `.env` (не в git), пример — `.env.example`.
+- Kubernetes: Secret `sensor-secrets` (`DEMO_PASSWORD`, `SESSION_SECRET`) зашифрован SOPS на ключ age. Приватный ключ —
+  `~/.config/sops/age/keys.txt`, конфиг SOPS с публичным ключом — нетрекаемый `deploy/secrets/sops.local.yaml`.
+  Трекаемые файлы скрипты не меняют. Ротация пароля, ключа сессий и ключа age — `deploy/secrets/README.md`.
+- Сессия: подписанная cookie с истечением (12 ч), сравнение подписи за постоянное время; ротация пароля отзывает все сессии.
+  Logout стирает cookie в браузере; сама подпись действительна до истечения или ротации — это осознанный компромисс stateless-сессий.
+- Вход: не больше 30 попыток в минуту с адреса (429).
+- CI: Trivy блокирует образ с исправимыми HIGH/CRITICAL; push в GHCR только из `main`; `GITHUB_TOKEN` с `contents: read`, `packages: write`.
+- Кластер: API запускается не от root, у всех подов requests/limits.
+- Cloud-init: GitHub-токен для приватного репо передаётся через Terraform (`sensitive`) и удаляется после клонирования.
 
 ## Использование LLM
 
-В работе службы языковой модели нет. Код конвейера (Helm-чарт, CI, CD-скрипты, SOPS, мониторинг) написан
-пятью параллельными сессиями Grok CLI (`grok-4.7-build-fast`), каждая в своих каталогах. Ревью, интеграция,
-прогон в k3d и исправления — вручную. Промпты, оценка экономии времени (~7 ч → ~1.5 ч) и список ошибок модели,
-найденных при проверке: `docs/llm/prompts.md`.
+В работе службы языковой модели нет. LLM использовалась только при разработке.
 
-## Видео (требования, ролик снимает команда)
+- **Инструмент:** Grok CLI v1.0.52, модель `grok-4.7-build-fast`. Две волны параллельных сессий (5 + 4), у каждой свои
+  каталоги, git-команды сессиям запрещены. Ревью, интеграция, прогоны в k3d и коммиты — человек.
+- **Промпты** дословно — `docs/llm/prompts.md`.
+- **Экономия:** по субъективной оценке около 10 ч ручной работы против ~3 ч (генерация + ревью + исправления).
+  Хронометраж не вёлся.
+- **Ошибки модели, найденные проверкой:** canary Ingress без `canary-by-header`, окно `rate[1m]` при scrape 30 с,
+  smoke не принимал формат подписанной cookie, Ansible в обход SOPS, секрет применялся без перезапуска подов.
+  Все найдены реальными прогонами в кластере, а не чтением кода, — поэтому все критичные пути имеют логи в `docs/`.
+- **Риски внешнего API:** в промпты уходил только код этого репозитория, без секретов и ключей (пароль стенда —
+  демонстрационный). Сборка, CI и запуск от LLM не зависят: если API недоступен, ничего не ломается.
+- **Как проверить без ключа LLM:** ключ не нужен вообще — все проверки воспроизводятся командами из раздела «Как запустить»,
+  CI и логами в `docs/`.
+- **Понимание кода командой:** каждый сгенерированный файл прошёл ревью; что делает каждый скрипт, описано в README и
+  в шапках скриптов; исправления выше сделаны вручную после разбора причин.
 
-- До 5 минут, показывать работающий стенд, а не установку с нуля. Склейка и монтаж допустимы.
-- Сгенерированные кадры не использовать.
-- Что показать: push → Actions, вход и probe, canary и откат (`make k8s-rollback-demo`), дашборд и срабатывание алерта.
+## Видео
+
+Требования: до 5 минут, показать работающий стенд, а не установку с нуля; склейка и монтаж допустимы; сгенерированные кадры
+не использовать. Пошаговый сценарий с таймингом — `docs/demo-script.md`. Ролик снимает команда.
+
+## Что не проверено и ограничения
+
+- **Нативный k3s на Ubuntu** (`make k8s-up` без `K3D=1`) на box не запускался: в песочнице нет systemd и vxlan.
+  Тот же скрипт и те же чарты проверены в k3d с образом k3s v1.31.4. Для песочницы понадобились параметры
+  `K3D_PRELOAD=1` (из подов нет egress), `INGRESS_SERVICE_TYPE=NodePort` (не работает hostPort) и host-gw вместо vxlan —
+  на обычной Ubuntu они не нужны.
+- **`terraform apply`** на box не доведён: вложенная ВМ на 6 ГБ исчерпала память песочницы. Проверены `terraform validate`
+  и `cloud-init schema`; внутри ВМ выполняется тот же `make k8s-up`, что проверен выше.
+- Доставка алертов во внешний канал не настраивалась (receiver `null`).
 
 ## Troubleshooting
 
-- `make: command not found` — поставить make или выполнить `cp .env.example .env` и `docker compose up --build -d`.
+- `make: command not found` — `sudo apt-get install -y make` или `cp .env.example .env && docker compose up --build -d`.
 - Порт 8080 занят — остановить другой процесс или сменить проброс в `compose.yaml`.
-- API не проходит healthcheck — в `.env` пароль короче 12 символов, процесс не стартует. В логах будет текст про `DEMO_PASSWORD`. Смотреть: `docker compose logs api`.
-- Страница входа пишет, что сервер недоступен — web поднялся раньше ready или API перезапускается. Подождать и обновить. Готовность: `curl -fsS http://127.0.0.1:8080/ready`.
-- После входа снова форма — cookie не сохранилась. Открывать именно `http://127.0.0.1:8080`, не файл с диска и не другой хост.
-- Фрагмент на главной не загрузился — это статический `landing/visual-data.json`. Кнопка «Повторить» запрашивает его снова. Это не вызов API.
-- Образ не собирается на старом Docker — нужен BuildKit и Compose V2, обычные для Ubuntu 24.04.
-
-- `make k8s-up` падает на установке k3s — нужен sudo и доступ к get.k3s.io. Повторный запуск идемпотентен.
-- Поды в `ImagePullBackOff` — образы не импортированы: `make k8s-images`.
+- API не проходит healthcheck — в `.env` пароль короче 12 символов: `docker compose logs api`.
+- После входа снова форма — открывать именно `http://127.0.0.1:8080`, не файл и не другой хост.
+- Образ не собирается — нужен BuildKit и Compose V2 (есть в Ubuntu 24.04).
+- `make k8s-up` падает на установке k3s — нужен sudo и доступ к get.k3s.io; повторный запуск идемпотентен.
+- Поды в `ImagePullBackOff` — образы приложения не импортированы: `make k8s-images`; при закрытом egress — `K3D_PRELOAD=1`.
 - `sensor.localtest.me` не открывается — DNS не отдаёт 127.0.0.1: добавить `127.0.0.1 sensor.localtest.me grafana.localtest.me` в `/etc/hosts`.
-- `failed calling webhook validate.nginx.ingress.kubernetes.io` — admission webhook ingress-nginx ещё не готов; подождать минуту и повторить `make k8s-deploy`.
-- Во время canary с весом пользователя «выкидывает» на вход — сессии в памяти процесса, stable и canary их не делят. Для smoke используется заголовок `X-Canary`.
-- Секрет не расшифровывается — нет ключа age в `~/.config/sops/age/keys.txt`; на новом стенде заново выполнить `scripts/secrets-init.sh`.
+- Smoke падает на входе после смены секрета — Secret читается подами при старте; `scripts/secrets-apply.sh` сам делает `rollout restart`.
+- `Ключ age этой машины не совпадает с получателем` — файл зашифрован другим ключом: удалить `deploy/secrets/sensor-secrets.enc.yaml`
+  и запустить `scripts/secrets-init.sh` заново (будет новый пароль).
+- Canary откатился с `prometheus returned no sample` — Prometheus ещё не снял две точки: увеличить `ANALYSIS_WAIT_S`.
+- `make k8s-canary` пишет `WARN` про Prometheus — нет port-forward на 9090; гейт работает только по smoke.
 
 ## Лицензия
 
