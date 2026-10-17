@@ -198,7 +198,7 @@ make down                # удалить кластер (и Compose-демо, �
   релиз сам. Затем `scripts/smoke.sh` (`/ready`, `/metrics`, 401 без cookie, вход, `/api/v1/service`, probe); при провале
   `helm rollback sensor 0`, а если это была первая установка (откатываться некуда) — `helm uninstall sensor`.
 - `scripts/canary.sh TAG` — релиз `sensor-canary` с аннотациями ingress-nginx `canary`, `canary-weight`, `canary-by-header: X-Canary`.
-  На каждом шаге: smoke через `X-Canary: always`, ожидание target canary в Prometheus (до 300 с), нагрузка через ingress, затем PromQL:
+  На каждом шаге: smoke через `X-Canary: always`, нагрузка через ingress, затем PromQL (`up` canary — если Prometheus успел обнаружить target за 120 с; основной гейт — метрики ingress-nginx):
   `min(up{namespace="sensor",service="sensor-canary-api"}) == 1`;
   `sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m])) > 0`
   (запросы именно через canary-апстрим ingress-nginx, пробы kubelet сюда не попадают);
@@ -229,7 +229,7 @@ make down                # удалить кластер (и Compose-демо, �
 - Сервис отдаёт `/health`, `/ready`, `/metrics` (`service_up`, `http_requests_total`, `service_probe_latency_seconds`).
 - Метрики ingress-nginx (`controller.metrics.enabled`, ServiceMonitor `deploy/monitoring/ingress-nginx-servicemonitor.yaml`): по ним считаются трафик и 5xx canary.
 - ServiceMonitor из чарта (label `release: mon`) подключает `/metrics` stable и canary к Prometheus.
-- Дашборд Grafana `sensor-gateway` (`deploy/monitoring/dashboard-configmap.yaml`): service_up, rate запросов, задержка probe, `up` таргета.
+- Дашборд Grafana `sensor-gateway` (`deploy/monitoring/dashboard-configmap.yaml`): число живых таргетов API, `up` по таргетам, req/s по сервисам, задержка probe (без порога), доля 5xx через ingress-nginx.
 
   ![Grafana](docs/img/grafana-sensor-gateway.png)
 

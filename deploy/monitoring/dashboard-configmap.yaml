@@ -4,7 +4,7 @@ metadata:
   name: sensor-gateway-dashboard
   namespace: monitoring
   labels:
-    grafana_dashboard: "1"
+    grafana_dashboard: '1'
   annotations:
     grafana_folder: Sensor
 data:
@@ -13,21 +13,35 @@ data:
       "uid": "sensor-gateway",
       "title": "sensor-gateway",
       "description": "sensor-gateway: process gauge, request rate, last probe latency, scrape target.",
-      "tags": ["sensor-gateway", "sensor"],
+      "tags": [
+        "sensor-gateway",
+        "sensor"
+      ],
       "timezone": "browser",
       "schemaVersion": 39,
       "version": 1,
       "refresh": "30s",
-      "time": {"from": "now-1h", "to": "now"},
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
       "editable": true,
       "panels": [
         {
           "id": 1,
           "type": "stat",
-          "title": "service_up",
+          "title": "Живые таргеты API (stable + canary)",
           "description": "Gauge from GET /metrics. 1 while the API process serves metrics.",
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "gridPos": {"h": 7, "w": 6, "x": 0, "y": 0},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 6,
+            "x": 0,
+            "y": 0
+          },
           "fieldConfig": {
             "defaults": {
               "min": 0,
@@ -36,8 +50,14 @@ data:
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
-                  {"color": "red", "value": null},
-                  {"color": "green", "value": 1}
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
                 ]
               },
               "mappings": [
@@ -45,7 +65,10 @@ data:
                   "type": "special",
                   "options": {
                     "match": "null",
-                    "result": {"text": "нет данных", "color": "red"}
+                    "result": {
+                      "text": "нет данных",
+                      "color": "red"
+                    }
                   }
                 }
               ]
@@ -53,7 +76,13 @@ data:
             "overrides": []
           },
           "options": {
-            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
             "orientation": "auto",
             "textMode": "value",
             "colorMode": "background",
@@ -63,8 +92,11 @@ data:
           "targets": [
             {
               "refId": "A",
-              "datasource": {"type": "prometheus", "uid": "prometheus"},
-              "expr": "service_up",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum(up{namespace=\"sensor\",service=~\".*-api\"}) or vector(0)",
               "legendFormat": "{{pod}}",
               "instant": true
             }
@@ -73,10 +105,18 @@ data:
         {
           "id": 2,
           "type": "timeseries",
-          "title": "up{job=~\".*sensor.*api.*\"}",
+          "title": "up по таргетам API",
           "description": "Prometheus scrape of the api Service (stable sensor-api and canary sensor-canary-api).",
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "gridPos": {"h": 7, "w": 18, "x": 6, "y": 0},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 18,
+            "x": 6,
+            "y": 0
+          },
           "fieldConfig": {
             "defaults": {
               "min": 0,
@@ -92,22 +132,38 @@ data:
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
-                  {"color": "red", "value": null},
-                  {"color": "green", "value": 1}
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
                 ]
               }
             },
             "overrides": []
           },
           "options": {
-            "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
-            "tooltip": {"mode": "multi", "sort": "none"}
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
           },
           "targets": [
             {
               "refId": "A",
-              "datasource": {"type": "prometheus", "uid": "prometheus"},
-              "expr": "up{job=~\".*sensor.*api.*\"}",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "up{namespace=\"sensor\",service=~\".*-api\"}",
               "legendFormat": "{{namespace}}/{{service}}"
             }
           ]
@@ -115,10 +171,18 @@ data:
         {
           "id": 3,
           "type": "timeseries",
-          "title": "rate(http_requests_total[1m])",
+          "title": "Запросы к API, req/s",
           "description": "Requests per second. The counter includes the /metrics scrape itself.",
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 7},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 7
+          },
           "fieldConfig": {
             "defaults": {
               "unit": "reqps",
@@ -133,14 +197,24 @@ data:
             "overrides": []
           },
           "options": {
-            "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
-            "tooltip": {"mode": "multi", "sort": "none"}
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
           },
           "targets": [
             {
               "refId": "A",
-              "datasource": {"type": "prometheus", "uid": "prometheus"},
-              "expr": "rate(http_requests_total[1m])",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "expr": "sum by (service) (rate(http_requests_total{namespace=\"sensor\"}[2m]))",
               "legendFormat": "{{pod}}"
             }
           ]
@@ -150,8 +224,16 @@ data:
           "type": "timeseries",
           "title": "service_probe_latency_seconds",
           "description": "Latency of the latest POST /api/v1/service/probe. Alert threshold is 0.5s.",
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 7},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 7
+          },
           "fieldConfig": {
             "defaults": {
               "unit": "s",
@@ -160,29 +242,87 @@ data:
                 "lineWidth": 1,
                 "fillOpacity": 10,
                 "showPoints": "auto",
-                "spanNulls": false,
-                "thresholdsStyle": {"mode": "line"}
+                "spanNulls": false
               },
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
-                  {"color": "green", "value": null},
-                  {"color": "orange", "value": 0.5}
+                  {
+                    "color": "green",
+                    "value": null
+                  }
                 ]
               }
             },
             "overrides": []
           },
           "options": {
-            "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
-            "tooltip": {"mode": "multi", "sort": "none"}
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
           },
           "targets": [
             {
               "refId": "A",
-              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
               "expr": "service_probe_latency_seconds",
               "legendFormat": "{{pod}}"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Доля 5xx через ingress-nginx",
+          "description": "Requests per second. The counter includes the /metrics scrape itself.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 15
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 15,
+                "showPoints": "never",
+                "spanNulls": false
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "none"
+            }
+          },
+          "targets": [
+            {
+              "expr": "(sum(rate(nginx_ingress_controller_requests{exported_namespace=\"sensor\",status=~\"5..\"}[5m])) or vector(0)) / sum(rate(nginx_ingress_controller_requests{exported_namespace=\"sensor\"}[5m]))",
+              "refId": "A",
+              "legendFormat": "5xx share"
             }
           ]
         }
