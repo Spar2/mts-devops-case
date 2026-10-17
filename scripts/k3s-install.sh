@@ -5,12 +5,18 @@
 # K3D_LB_PORT: host port of the k3d loadbalancer (default INGRESS_PORT, else 8081).
 # Then Helm 3.16.3 if missing, and ingress-nginx 4.11.3 as a LoadBalancer
 # without hostNetwork (k3s ServiceLB publishes it).
-# helm/kubectl/k3d скачиваются только если нужной версии ещё нет, и сверяются с sha256
-# официальных файлов релизов (суммы ниже, сняты 2026-10-17):
+# helm/kubectl/k3d и бинарь k3s скачиваются только если нужной версии ещё нет,
+# и сверяются с sha256 официальных файлов релизов (суммы ниже, сняты 2026-10-17):
 #   https://get.helm.sh/helm-v3.16.3-linux-<arch>.tar.gz.sha256sum
 #   https://dl.k8s.io/release/v1.31.4/bin/linux/<arch>/kubectl.sha256
 #   https://github.com/k3d-io/k3d/releases/download/v5.8.3/checksums.txt
 #     (_dist/k3d-linux-amd64, _dist/k3d-linux-arm64)
+#   https://github.com/k3s-io/k3s/releases/download/v1.31.4+k3s1/sha256sum-amd64.txt (строка k3s)
+#   https://github.com/k3s-io/k3s/releases/download/v1.31.4+k3s1/sha256sum-arm64.txt (строка k3s-arm64)
+# Нативный k3s не ставится через curl | sh с get.k3s.io. install.sh берётся из тега
+# raw.githubusercontent.com/k3s-io/k3s/v1.31.4+k3s1/install.sh. В sha256sum-*.txt релиза
+# этого скрипта нет: сумма ниже — sha256 самого файла тега, снята 2026-10-17.
+# Бинарь кладётся в /usr/local/bin/k3s, установщик запускается с INSTALL_K3S_SKIP_DOWNLOAD=true.
 set -euo pipefail
 
 K3S_VERSION="v1.31.4+k3s1"
@@ -75,6 +81,39 @@ k3d_sha() {
       return 1
       ;;
   esac
+}
+
+# Имена файлов в sha256sum-<arch>.txt релиза k3s.
+k3s_asset_name() {
+  case "$1" in
+    amd64) echo k3s ;;
+    arm64) echo k3s-arm64 ;;
+    *)
+      echo "нет имени бинаря k3s для архитектуры $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+k3s_sha() {
+  case "$1" in
+    amd64) echo 74897e4af26ea383ce50f445752f40ca63a0aef0d90994fb74073c43063eeeb2 ;;
+    arm64) echo eff4cc82c8c057bd2dc432025b933616637dcf3df91e9e06720d9208743640d3 ;;
+    *)
+      echo "нет sha256 k3s для архитектуры $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+# sha256 install.sh тега v1.31.4+k3s1. В sha256sum-*.txt релиза скрипта нет.
+k3s_install_sha() {
+  echo f60c3d8940dfc896f7d83aaf57726c91cf21afc4bca40036472df108d9700b4b
+}
+
+# «+» в теге кодируется как %2B, иначе часть клиентов режет путь.
+k3s_url_version() {
+  printf '%s' "${K3S_VERSION//+/%2B}"
 }
 
 check_cluster_name() {
@@ -159,21 +198,55 @@ k3s_matches() {
   return 0
 }
 
+# Уже лежащий /usr/local/bin/k3s нужной версии повторно не качается и не сверяется
+# (как helm/kubectl/k3d). Иначе бинарь релиза сверяется и кладётся туда до установщика:
+# INSTALL_K3S_SKIP_DOWNLOAD не проверяет сумму и требует исполняемый файл в BIN_DIR.
+k3s_bin_ok() {
+  [[ -x /usr/local/bin/k3s ]] || return 1
+  [[ "$(/usr/local/bin/k3s --version 2>/dev/null | awk '{print $3}')" == "${K3S_VERSION}" ]]
+}
+
+install_k3s_release() {
+  local arch tmp asset url_ver
+  arch="$(linux_arch)"
+  tmp="$(mktemp -d)"
+  # Путь раскрывается сразу: при exit локальный tmp уже может быть недоступен.
+  # shellcheck disable=SC2064
+  trap 'rm -rf "'"${tmp}"'"' EXIT
+  url_ver="$(k3s_url_version)"
+
+  if k3s_bin_ok; then
+    echo "k3s ${K3S_VERSION} binary present"
+  else
+    asset="$(k3s_asset_name "${arch}")"
+    curl -fsSL -o "${tmp}/k3s" \
+      "https://github.com/k3s-io/k3s/releases/download/${url_ver}/${asset}"
+    verify_sha256 "${tmp}/k3s" "$(k3s_sha "${arch}")" "k3s ${K3S_VERSION} ${asset}"
+    run_root install -m 0755 "${tmp}/k3s" /usr/local/bin/k3s
+    echo "installed k3s binary ${K3S_VERSION}"
+  fi
+
+  curl -fsSL -o "${tmp}/install.sh" \
+    "https://raw.githubusercontent.com/k3s-io/k3s/${url_ver}/install.sh"
+  verify_sha256 "${tmp}/install.sh" "$(k3s_install_sha)" "k3s install.sh ${K3S_VERSION}"
+  # ServiceLB stays enabled so LoadBalancer Services get an address.
+  run_root env \
+    INSTALL_K3S_VERSION="${K3S_VERSION}" \
+    INSTALL_K3S_SKIP_DOWNLOAD=true \
+    INSTALL_K3S_BIN_DIR=/usr/local/bin \
+    sh "${tmp}/install.sh" \
+    --disable traefik \
+    --write-kubeconfig-mode 600
+  rm -rf "${tmp}"
+  trap - EXIT
+}
+
 install_k3s() {
   if k3s_matches; then
     echo "k3s ${K3S_VERSION} already installed (traefik disabled)"
   else
     echo "installing k3s ${K3S_VERSION}"
-    # ServiceLB stays enabled so LoadBalancer Services get an address.
-    if [[ "$(id -u)" -eq 0 ]]; then
-      curl -sfL https://get.k3s.io | env INSTALL_K3S_VERSION="${K3S_VERSION}" sh -s - \
-        --disable traefik \
-        --write-kubeconfig-mode 600
-    else
-      curl -sfL https://get.k3s.io | sudo env INSTALL_K3S_VERSION="${K3S_VERSION}" sh -s - \
-        --disable traefik \
-        --write-kubeconfig-mode 600
-    fi
+    install_k3s_release
   fi
   if [[ -f /etc/rancher/k3s/k3s.yaml ]]; then
     # Админ-kubeconfig не должен читаться всеми пользователями хоста.
