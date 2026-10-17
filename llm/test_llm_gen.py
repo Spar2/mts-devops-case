@@ -98,3 +98,8 @@ def test_generate_with_repair_against_fake_server(tmp_path):
     assert "severity" in seen[1]["messages"][-1]["content"]
     run = json.loads((tmp_path / "runs.jsonl").read_text())
     assert run["valid"] and run["attempts"] == 2 and run["prompt_file"].startswith("llm/prompts/")
+
+
+def test_cyrillic_share():
+    assert llm_gen.cyrillic_share("- Что упало: smoke `login` вернула HTTP 401") > 0.5
+    assert llm_gen.cyrillic_share("- Check failed: smoke login returned 401") < 0.1
