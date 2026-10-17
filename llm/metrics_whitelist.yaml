@@ -3,9 +3,13 @@
 # type: gauge | counter | histogram
 # labels: метки, которые есть на ряде после scrape (не выдуманные).
 #
-# API пишет три ряда без своих меток (services/api/app/main.py, обработчик /metrics).
-# Гистограммы нет: http_request_duration_seconds_bucket сервис не отдаёт.
+# API (services/api/app/main.py, prometheus_client 0.26.0):
+# service_up и service_probe_latency_seconds — gauge без меток приложения;
+# http_requests_total — counter с метками method, path, status;
+# http_request_duration_seconds — histogram с теми же метками. На scrape это
+# http_request_duration_seconds_bucket (дополнительно le), _sum и _count.
 # namespace, service, pod, container, endpoint, job, instance — метки таргета ServiceMonitor.
+# process_* реестр тоже отдаёт; в этот список они не входят.
 #
 # ingress-nginx 4.11.3, nginx_ingress_controller_requests. У контроллера своя метка namespace;
 # при honor_labels=false Prometheus переименовывает её в exported_namespace, а namespace
@@ -22,7 +26,57 @@ metrics:
     labels: [namespace, service, pod, container, endpoint, job, instance]
   http_requests_total:
     type: counter
-    labels: [namespace, service, pod, container, endpoint, job, instance]
+    labels:
+      - method
+      - path
+      - status
+      - namespace
+      - service
+      - pod
+      - container
+      - endpoint
+      - job
+      - instance
+  http_request_duration_seconds_bucket:
+    type: histogram
+    labels:
+      - method
+      - path
+      - status
+      - le
+      - namespace
+      - service
+      - pod
+      - container
+      - endpoint
+      - job
+      - instance
+  http_request_duration_seconds_sum:
+    type: histogram
+    labels:
+      - method
+      - path
+      - status
+      - namespace
+      - service
+      - pod
+      - container
+      - endpoint
+      - job
+      - instance
+  http_request_duration_seconds_count:
+    type: histogram
+    labels:
+      - method
+      - path
+      - status
+      - namespace
+      - service
+      - pod
+      - container
+      - endpoint
+      - job
+      - instance
   up:
     type: gauge
     labels: [namespace, service, pod, container, endpoint, job, instance]

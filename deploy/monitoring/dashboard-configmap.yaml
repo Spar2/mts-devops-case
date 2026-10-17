@@ -12,7 +12,7 @@ data:
     {
       "uid": "sensor-gateway",
       "title": "sensor-gateway",
-      "description": "sensor-gateway: process gauge, request rate, last probe latency, scrape target.",
+      "description": "sensor-gateway: API targets, request rate, HTTP p95, ingress 5xx share.",
       "tags": [
         "sensor-gateway",
         "sensor"
@@ -31,7 +31,7 @@ data:
           "id": 1,
           "type": "stat",
           "title": "Живые таргеты API (stable + canary)",
-          "description": "Gauge from GET /metrics. 1 while the API process serves metrics.",
+          "description": "Prometheus up for Service *-api. 0 when the target is down or gone. service_up on the API is a separate readiness gauge.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -172,7 +172,7 @@ data:
           "id": 3,
           "type": "timeseries",
           "title": "Запросы к API, req/s",
-          "description": "Requests per second. The counter includes the /metrics scrape itself.",
+          "description": "Requests per second, summed over method, path and status. The counter includes the /metrics scrape.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -222,8 +222,8 @@ data:
         {
           "id": 4,
           "type": "timeseries",
-          "title": "Задержка probe службы",
-          "description": "Latency of the latest POST /api/v1/service/probe. No alert threshold.",
+          "title": "Задержка HTTP, p95",
+          "description": "p95 of http_request_duration_seconds. SensorGatewayHighLatency fires above 0.5s for 2m.",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -250,6 +250,10 @@ data:
                   {
                     "color": "green",
                     "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.5
                   }
                 ]
               }
@@ -274,8 +278,8 @@ data:
                 "type": "prometheus",
                 "uid": "prometheus"
               },
-              "expr": "service_probe_latency_seconds",
-              "legendFormat": "{{pod}}"
+              "expr": "histogram_quantile(0.95, sum by (le, service) (rate(http_request_duration_seconds_bucket{namespace=\"sensor\"}[5m])))",
+              "legendFormat": "{{service}}"
             }
           ]
         },

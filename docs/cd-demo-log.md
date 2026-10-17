@@ -2,6 +2,8 @@
 
 Стенд: k3d, ingress-nginx 4.11.3, kube-prometheus-stack 65.1.1, Prometheus через port-forward (`PROM_URL=http://127.0.0.1:9090`), ingress через port-forward (`INGRESS_PORT=18081`).
 
+В выдержках smoke этого файла cookie ещё `dts_session`, а `/metrics` открыт через ingress. Сейчас cookie — `sensor_session`; снаружи путь закрывает nginx web (403 или 404), тело метрик smoke читает из пода API.
+
 ## 1. Провал canary → автоматический откат (`scripts/canary-fail-demo.sh s2`)
 
 Canary запускается с неверным секретом: поды готовы, но smoke-вход не проходит.

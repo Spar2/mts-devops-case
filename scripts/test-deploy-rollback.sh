@@ -86,17 +86,31 @@ case "$1" in
 esac
 EOF
 
+# smoke.sh читает тело /metrics через kubectl exec в под API. Другой вызов — ошибка.
+metrics_exec='-n sensor exec deploy/sensor-api -c api -- python -c import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8000/metrics", timeout=5).read().decode())'
 cat >"${bindir}/kubectl" <<'EOF'
 #!/usr/bin/env bash
+set -euo pipefail
 printf '%s\n' "$*" >>"${KUBECTL_LOG:?}"
+if [[ "$*" == "${METRICS_EXEC:?}" ]]; then
+  printf '%s\n' '# TYPE http_request_duration_seconds histogram'
+  printf '%s\n' 'service_up 1'
+  exit 0
+fi
 exit 1
 EOF
 chmod 0755 "${bindir}/helm" "${bindir}/kubectl"
 
 fail() {
   printf 'FAIL %s\n' "$*" >&2
-  printf '--- stdout ---\n%s\n--- stderr ---\n%s\n--- helm log ---\n%s\n' \
-    "$(cat "${work}/out")" "$(cat "${work}/err")" "$(cat "${helm_log}")" >&2
+  printf '%s\n' '--- stdout ---' >&2
+  cat "${work}/out" >&2
+  printf '%s\n' '--- stderr ---' >&2
+  cat "${work}/err" >&2
+  printf '%s\n' '--- helm log ---' >&2
+  cat "${helm_log}" >&2
+  printf '%s\n' '--- kubectl log ---' >&2
+  cat "${kubectl_log}" >&2
   exit 1
 }
 
@@ -129,6 +143,7 @@ run_case() {
     HELM_ROLLBACK_FAIL="${HELM_ROLLBACK_FAIL:-0}" \
     HELM_UNINSTALL_FAIL="${HELM_UNINSTALL_FAIL:-0}" \
     DEMO_PASSWORD="deploy-rollback-test" \
+    METRICS_EXEC="${metrics_exec}" \
     READY_TIMEOUT_S=1 \
     BASE_URL="http://127.0.0.1:${port}" \
     "${root}/scripts/deploy.sh" testtag >"${work}/out" 2>"${work}/err"
@@ -137,8 +152,8 @@ run_case() {
   if [[ "${code}" -ne "${expect_code}" ]]; then
     fail "${name}: код ${code}, ожидался ${expect_code}"
   fi
-  if [[ -s "${kubectl_log}" ]]; then
-    fail "${name}: kubectl вызывался: $(cat "${kubectl_log}")"
+  if [[ "$(cat "${kubectl_log}")" != "${metrics_exec}" ]]; then
+    fail "${name}: kubectl не чтение /metrics: $(cat "${kubectl_log}")"
   fi
   assert_grep "${helm_log}" '^upgrade ' "${name}"
   printf 'PASS %s\n' "${name}"
