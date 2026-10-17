@@ -112,3 +112,33 @@ def test_promtool_missing_is_error(monkeypatch):
     doc = {"spec": {"groups": [{"name": "g", "rules": [{"alert": "A", "expr": "up == 0"}]}]}}
     errs = llm_gen.promtool_check(doc)
     assert errs and "promtool" in errs[0]
+
+
+def test_explain_logs_prompt_and_checks_only_long_numbers(tmp_path):
+    answer = "Канарейка откатилась на весе 50: smoke получил 401, а не 503."
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            out = json.dumps({"choices": [{"message": {"content": answer}}], "usage": {}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    log = tmp_path / "canary.log"
+    log.write_text("FAIL login: HTTP 401\nROLLBACK canary: smoke failed at weight 10\n", encoding="utf-8")
+    env = dict(os.environ, LLM_URL=f"http://127.0.0.1:{srv.server_port}", LLM_LOG=str(tmp_path / "out" / "runs.jsonl"))
+    p = subprocess.run([sys.executable, os.path.join(HERE, "llm_gen.py"), "explain", str(log)],
+                       env=env, capture_output=True, text=True)
+    srv.shutdown()
+    run = json.loads((tmp_path / "out" / "runs.jsonl").read_text())
+    # 503 is not in the log -> rejected; 50 (two digits) is not checked.
+    assert p.returncode == 1
+    assert run["errors"] == ["number not in log: 503"]
+    assert "ROLLBACK canary" in run["user"]
