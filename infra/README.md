@@ -100,10 +100,13 @@ sudo tail -f /var/log/mts-k8s-up.log
 Локальные проверки ниже читают файлы и не создают ВМ. Живой прогон — следом и в `docs/iac-apply-log.md`.
 
 ```bash
+terraform fmt -check -recursive infra/terraform
 terraform -chdir=infra/terraform init -backend=false
 terraform -chdir=infra/terraform validate
 cloud-init schema -c infra/cloud-init/user-data.example.yaml
 ```
+
+Те же команды и `cloud-init schema --schema-type network-config` выполняет job `iac` в `.github/workflows/ci.yml` (Terraform 1.9.8, cloud-init из архива Ubuntu 24.04, локально проверено 26.1; job зелёный на GitHub, pull request #3). `user-data.yaml.tftpl` в `cloud-init schema` не проходит: это шаблон `templatefile`, не готовый cloud-config.
 
 - `terraform validate` проверяет синтаксис HCL, ссылки между ресурсами и аргументы провайдера `dmacvicar/libvirt` `~> 0.8.1`: один домен, том 30 ГиБ, cloud-init из `user-data.yaml.tftpl`. vCPU, RAM и `run_make_up` — переменные; по умолчанию 4, 8192 и `true`.
 - `cloud-init schema` сверяет пример рендера со схемой cloud-config. Пример — ветка `run_make_up=true`: URL репозитория, плейсхолдер `__GITHUB_TOKEN__` и строка-заглушка SSH-ключа. Это вход для схемы, не секрет и не ключ доступа. На хосте без datasource cloud-init пишет предупреждение и при успехе печатает `Valid schema`.
