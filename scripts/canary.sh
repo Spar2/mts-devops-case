@@ -26,8 +26,9 @@
 # Each step installs release sensor-canary (track=canary, canary.enabled=true,
 # canary.weight=W) and waits until ingress-nginx shows that weight. Then:
 #   1. scripts/smoke.sh with X_CANARY=always and EXPECT_VERSION=TAG
-#   2. WEIGHT_SAMPLE_N rounds with no X-Canary header and no cookie, each round
-#      hitting /ready, / and /api/v1/service. Without a cookie /api/v1/service
+#   2. WEIGHT_SAMPLE_N rounds with no X-Canary header and no sensor_session
+#      cookie, each round hitting /ready, / and /api/v1/service. Without a
+#      sensor_session cookie /api/v1/service
 #      is 401, and 401 is not a 5xx. The version share uses only HTTP 200
 #      /ready responses (integer percent, hits*100/http_ok): 10 → 2–25,
 #      50 → 30–70, 100 → 100. Another weight w in 1..99 →
@@ -499,7 +500,7 @@ weight_gate() {
   transport_fail=0
   transport_path=""
   statuses=()
-  # Same series for the version share and the 5xx ratio. No X-Canary, no cookie.
+  # Same series for the version share and the 5xx ratio. No X-Canary, no sensor_session cookie.
   step "sending ${n} requests without X-Canary to /ready, / and /api/v1/service (HTTP 200 /ready share want ${lo}-${hi}% version ${TAG})"
   for ((i = 1; i <= n; i++)); do
     for path in "${sample_paths[@]}"; do

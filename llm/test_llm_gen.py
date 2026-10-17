@@ -119,34 +119,43 @@ def _with_expr(expr):
 
 
 def test_whitelist_rejects_unknown_metric_label_and_histogram_on_counter():
-    # 5xx via http_requests_total: the counter has no status label, and it is not a histogram.
+    # status is a real label. histogram_quantile still needs a *_bucket series.
     bad = _with_expr('histogram_quantile(0.95, sum(rate(http_requests_total{status=~"5.."}[5m])))')
     errs = llm_gen.validate_rule_text(bad)
-    assert any("нет метки status" in e and "http_requests_total" in e for e in errs), errs
+    assert not any("нет метки status" in e for e in errs), errs
     assert any("histogram_quantile" in e and "http_requests_total" in e for e in errs), errs
     assert not any("неизвестная метрика http_requests_total" in e for e in errs), errs
+
+    unknown_label = _with_expr('rate(http_requests_total{foo="1"}[5m])')
+    label_errs = llm_gen.validate_rule_text(unknown_label)
+    assert any("нет метки foo" in e and "http_requests_total" in e for e in label_errs), label_errs
 
     mem = _with_expr("process_resident_memory_bytes > 400000000")
     mem_errs = llm_gen.validate_rule_text(mem)
     assert any("неизвестная метрика process_resident_memory_bytes" in e for e in mem_errs), mem_errs
 
 
-def test_whitelist_allows_nginx_5xx_and_requires_bucket_on_the_list():
+def test_whitelist_allows_nginx_5xx_and_http_duration_quantile():
     nginx = _with_expr(
         '(sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",status=~"5.."}[5m]))'
         ' or vector(0)) / sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor"}[5m])) > 0.05'
     )
     assert llm_gen.validate_rule_text(nginx) == []
 
+    latency = _with_expr(
+        'histogram_quantile(0.95, sum by (le, service) (rate(http_request_duration_seconds_bucket{namespace="sensor",method="GET",path="/ready",status="200"}[5m]))) > 0.5'
+    )
+    assert llm_gen.validate_rule_text(latency) == [], llm_gen.validate_rule_text(latency)
+
     # Suffix _bucket is not enough: the series is not on the stand.
-    invented = _with_expr("histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])))")
+    invented = _with_expr("histogram_quantile(0.95, sum(rate(not_a_real_histogram_bucket[5m])))")
     errs = llm_gen.validate_rule_text(invented)
-    assert any("неизвестная метрика http_request_duration_seconds_bucket" in e for e in errs), errs
+    assert any("неизвестная метрика not_a_real_histogram_bucket" in e for e in errs), errs
     assert not any("histogram_quantile" in e for e in errs), errs
 
 
 def test_repair_receives_whitelist_errors(tmp_path):
-    bad = _with_expr('histogram_quantile(0.95, sum(rate(http_requests_total{status=~"5.."}[5m])))')
+    bad = _with_expr('histogram_quantile(0.95, sum(rate(http_requests_total{foo="1"}[5m])))')
     answers = [bad, GOOD]
     seen = []
 
@@ -171,7 +180,7 @@ def test_repair_receives_whitelist_errors(tmp_path):
     srv.shutdown()
     assert p.returncode == 0, p.stderr
     repair = seen[1]["messages"][-1]["content"]
-    assert "нет метки status" in repair
+    assert "нет метки foo" in repair
     assert "histogram_quantile" in repair
     assert "http_requests_total" in repair
 

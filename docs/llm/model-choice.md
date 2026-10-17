@@ -12,11 +12,11 @@
 3. `rule2`: «critical, если process_resident_memory_bytes > 400MB в течение 10m».
 4. `explain`: объяснить провал canary и откат по логу `llm/examples/canary-fail.log` (выдержка из `docs/cd-demo-log.md`).
 
-Фразы выше — текст этого повтора, не задач остальных строк таблицы. `process_resident_memory_bytes` и метки `status`/`path` у `http_requests_total` сервис не отдаёт: `/metrics` в `services/api/app/main.py` пишет сам, без `prometheus_client` и process collector. Имена и метки, которые валидатор принимает сейчас, — `llm/metrics_whitelist.yaml` (ряды API, `up`, `nginx_ingress_controller_requests`, kube-state-metrics из `deploy/monitoring/prometheusrule.yaml`).
+Фразы выше — текст этого повтора, не задач остальных строк таблицы. На повтор 2026-10-17 список в `llm/llm_gen.py` был `up`, `service_up`, `service_probe_latency_seconds`, `http_requests_total` без меток: `/metrics` писался вручную, `process_resident_memory_bytes` и метки `status`/`path` сервис не отдавал. Сейчас API пишет метрики через `prometheus_client` 0.26.0 (`http_requests_total` и `http_request_duration_seconds` с `method`, `path`, `status`, `service_up` по проверке готовности, измеренный `service_probe_latency_seconds`, process collector). Имена и метки, которые валидатор принимает, — `llm/metrics_whitelist.yaml`: ряды API, включая `http_request_duration_seconds_bucket`/`_sum`/`_count` и метки `method`, `path`, `status` у счётчика и гистограммы, `up`, `nginx_ingress_controller_requests`, kube-state-metrics из `deploy/monitoring/prometheusrule.yaml`. Строка для модели собирается из этого файла (`KNOWN_METRICS` в `llm/llm_gen.py`). `process_resident_memory_bytes` в списке нет.
 
 «Валидно» = прошёл YAML + структура + `release: mon` + `promtool check rules` (Prometheus v2.54.1), допускался один
 раунд исправления по ошибкам валидатора. «Смысл» — ручная проверка выражения человеком.
-Белый список в эти прогоны не входил. rule1 с `status` у `http_requests_total` и rule2 с `process_resident_memory_bytes` список сейчас отвергает.
+Белый список в эти прогоны не входил. rule1 с `status` у `http_requests_total` список больше не отвергает из-за метки: `status` у счётчика есть. `histogram_quantile` по `http_request_duration_seconds_bucket` валиден, по самому `http_requests_total` — нет. rule2 с `process_resident_memory_bytes` список по-прежнему отвергает: ряд в белый список не входит.
 
 | Модель (HF) | Формат | Файл | Лицензия | Генерация, ток/с | Prompt, ток/с | Память (docker stats) | Валидно rule0/1/2 | Смысл правил (вручную) | explain (вручную) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |

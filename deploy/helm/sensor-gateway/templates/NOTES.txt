@@ -20,4 +20,5 @@ HPA (CPU {{ .Values.hpa.targetCPUUtilizationPercentage }}%, min {{ .Values.hpa.m
 {{- end }}
 {{- if .Values.serviceMonitor.enabled }}
 ServiceMonitor {{ .Release.Name }}-api (label release=mon, path /metrics) is applied when monitoring.coreos.com/v1/ServiceMonitor exists.
+Web nginx returns 403 for /metrics. Prometheus scrapes the API Service, not the Ingress.
 {{- end }}
