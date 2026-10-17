@@ -9,6 +9,8 @@
 #                   secret sensor-secrets in namespace sensor.
 # DEMO_USERNAME     default demo
 # X_CANARY          if set, send "X-Canary: <value>" on every request
+# EXPECT_VERSION    if set, GET /ready must return this image tag both as
+#                   JSON "version" and as the X-App-Version header
 # READY_TIMEOUT_S   seconds to wait for GET /ready (default 60)
 
 set -euo pipefail
@@ -47,6 +49,11 @@ fi
 
 if [[ -n "${X_CANARY:-}" && ! "${X_CANARY}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   printf 'X_CANARY must be a single token\n' >&2
+  exit 2
+fi
+
+if [[ -n "${EXPECT_VERSION:-}" && ! "${EXPECT_VERSION}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+  printf 'EXPECT_VERSION must be a single image-tag token\n' >&2
   exit 2
 fi
 
@@ -92,6 +99,7 @@ curl_status() {
   : >"$err_file"
   status="$(
     curl "${curl_common[@]}" \
+      -D "$hdr_file" \
       -o "$body_file" \
       -w '%{http_code}' \
       "$@" \
@@ -130,15 +138,43 @@ read_secret_password() {
   printf '%s' "$decoded"
 }
 
+# First X-App-Version header value, without CR. Empty when the header is absent.
+header_app_version() {
+  awk 'tolower($1) == "x-app-version:" { gsub(/\r/, "", $2); print $2; exit }' "$1"
+}
+
+# JSON string field "version" from a /ready body. Empty when it is missing.
+body_app_version() {
+  awk '
+    match($0, /"version"[[:space:]]*:[[:space:]]*"[^"]*"/) {
+      s = substr($0, RSTART, RLENGTH)
+      sub(/^"version"[[:space:]]*:[[:space:]]*"/, "", s)
+      sub(/"$/, "", s)
+      print s
+      exit
+    }
+  ' "$1"
+}
+
 check_ready() {
-  local deadline status
+  local deadline status header_version body_version
   deadline=$((SECONDS + ready_timeout))
   status=000
   printf 'waiting up to %ss for %s/ready\n' "$ready_timeout" "$BASE_URL" >&2
   while ((SECONDS < deadline)); do
     status="$(curl_status "${BASE_URL}/ready")"
     if [[ "$status" == "200" ]]; then
-      pass "ready 200"
+      if [[ -z "${EXPECT_VERSION:-}" ]]; then
+        pass "ready 200"
+        return 0
+      fi
+      header_version="$(header_app_version "$hdr_file")"
+      body_version="$(body_app_version "$body_file")"
+      if [[ "$header_version" == "$EXPECT_VERSION" && "$body_version" == "$EXPECT_VERSION" ]]; then
+        pass "ready 200 version ${EXPECT_VERSION}"
+        return 0
+      fi
+      fail "ready version header=${header_version:-<empty>} body=${body_version:-<empty>}, expected ${EXPECT_VERSION}"
       return 0
     fi
     if ((SECONDS >= deadline)); then
@@ -209,7 +245,6 @@ check_login() {
   # Cookie header, not a cookie jar: curl will not resend a Secure cookie on http://.
   status="$(
     curl_status "${BASE_URL}/api/v1/auth/login" \
-      -D "$hdr_file" \
       -H 'Content-Type: application/json' \
       --data-binary @"${work}/login.json"
   )"

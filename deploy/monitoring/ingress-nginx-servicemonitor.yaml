@@ -1,5 +1,5 @@
 # Метрики ingress-nginx (controller.metrics.enabled=true в scripts/k3s-install.sh):
-# по ним canary.sh считает трафик и долю 5xx canary-Ingress.
+# по ним canary.sh считает трафик, долю 5xx и долю веса canary-Ingress.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

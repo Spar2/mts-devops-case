@@ -94,6 +94,8 @@ lint-deploy-rollback:
 
 # Полный контур: k3s + ingress-nginx + SOPS-секрет + kube-prometheus-stack + Helm-релиз.
 TAG ?= $(shell git rev-parse --short=7 HEAD)
+# Canary — другой тег, чем stable. Иначе выкладка повторяет тот же образ.
+CANARY_TAG ?= $(TAG)-canary
 PREFIX ?= ghcr.io/spar2/mts-devops-case
 K3D ?= 1
 # Имя k3d-кластера. Уже существующий кластер не пересоздаётся: k3s-install.sh пишет предупреждение.
@@ -146,10 +148,19 @@ k8s-deploy-ghcr:
 k8s-deploy:
 	./scripts/deploy.sh $(TAG)
 
-# Метрический гейт canary читает Prometheus по PROM_URL (по умолчанию port-forward на 9090).
+# Собирает образы с CANARY_TAG (по умолчанию <sha>-canary), импортирует их в кластер
+# и гоняет гейт. Prometheus — PROM_URL, по умолчанию port-forward на 9090.
 k8s-canary:
+	@test "$(CANARY_TAG)" != "$(TAG)" || { printf '%s\n' "CANARY_TAG совпадает с TAG ($(TAG)); задайте другой CANARY_TAG"; exit 1; }
+	docker build -t $(PREFIX)/sensor-gateway:$(CANARY_TAG) services/api
+	docker build -t $(PREFIX)/sensor-web:$(CANARY_TAG) apps/web
+ifeq ($(K3D),1)
+	k3d image import -c $(CLUSTER) $(PREFIX)/sensor-gateway:$(CANARY_TAG) $(PREFIX)/sensor-web:$(CANARY_TAG)
+else
+	docker save $(PREFIX)/sensor-gateway:$(CANARY_TAG) $(PREFIX)/sensor-web:$(CANARY_TAG) | sudo k3s ctr images import -
+endif
 	./scripts/prom-forward.sh
-	./scripts/canary.sh $(TAG)
+	./scripts/canary.sh $(CANARY_TAG)
 
 k8s-rollback-demo:
 	./scripts/rollback-demo.sh
@@ -221,11 +232,11 @@ llm-up: llm-fetch
 llm-down:
 	docker rm -f mts-llm
 
-# Описание → PrometheusRule → проверка (YAML, структура, release=mon, promtool check rules); при ошибке один раунд исправления.
+# Описание → PrometheusRule → проверка (YAML, структура, release=mon, белый список метрик llm/metrics_whitelist.yaml, promtool check rules); при ошибке один раунд исправления.
 llm-gen:
 	LLM_MODEL=$(LLM_NAME) $(LLM_PY) llm/llm_gen.py rule "$(DESC)"
 
-# Объяснение провала canary/отката по логу (по умолчанию пример из docs/cd-demo-log.md) с проверкой на выдуманные числа.
+# Объяснение провала canary/отката по логу (по умолчанию пример из docs/cd-demo-log.md). Числа из 3+ цифр сверяются по границам токена, не по подстроке.
 LOG ?= llm/examples/canary-fail.log
 llm-explain:
 	LLM_MODEL=$(LLM_NAME) $(LLM_PY) llm/llm_gen.py explain $(LOG)
