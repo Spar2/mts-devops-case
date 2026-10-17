@@ -190,11 +190,11 @@ llm-up: llm-fetch
 llm-down:
 	docker rm -f mts-llm
 
-# Описание → PrometheusRule → проверка (YAML, структура, release=mon, promtool check rules); при ошибке один раунд исправления.
+# Описание → PrometheusRule → проверка (YAML, структура, release=mon, белый список метрик llm/metrics_whitelist.yaml, promtool check rules); при ошибке один раунд исправления.
 llm-gen:
 	LLM_MODEL=$(LLM_NAME) $(LLM_PY) llm/llm_gen.py rule "$(DESC)"
 
-# Объяснение провала canary/отката по логу (по умолчанию пример из docs/cd-demo-log.md) с проверкой на выдуманные числа.
+# Объяснение провала canary/отката по логу (по умолчанию пример из docs/cd-demo-log.md). Числа из 3+ цифр сверяются по границам токена, не по подстроке.
 LOG ?= llm/examples/canary-fail.log
 llm-explain:
 	LLM_MODEL=$(LLM_NAME) $(LLM_PY) llm/llm_gen.py explain $(LOG)
