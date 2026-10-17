@@ -47,17 +47,6 @@
 | Отказоустойчивость stable | чарт: api и web по 2 реплики, PDB `minAvailable: 1`, HPA CPU 70% (min 2, max 4). Canary (`track=canary`): 1 реплика, без PDB и HPA | `helm template` stable и canary, `make lint` | Кластер не поднимался. `scripts/canary.sh`, `rollback-demo.sh` и `secrets-rotate-check.sh` на ровно одну реплику не завязаны |
 | Доставка алерта | Alertmanager → webhook `alert-sink` | `make k8s-alert-demo` | Проверено: firing → webhook → resolved (e2e и box) |
 | LLM: генерация конфигов с фиксацией промптов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Повтор 2026-10-17 (`make llm-up`, `-t 4`): из трёх фраз в `docs/llm/model-choice.md` с первой попытки valid одна (5xx, 16.88 с). Задержка invalid, attempts 2, 51.11 с. Память valid со 2-й, 104.27 с. Explain valid, 66.67 с. Оба прогона в `docs/llm/examples/runs.jsonl`. Job `llm` в CI |
-| Видео ≤ 5 мин | `docs/demo-script.md` | — | Сценарий готов, ролик снимает команда |
-
-## Состав команды (роли, опыт и навыки)
-
-| Роль | Зона ответственности в репозитории | Навыки, которые применены в решении |
-| --- | --- | --- |
-| Веб | Три окна: лендинг, вход, служба (`apps/web`) | React 19, Vite 8, nginx |
-| DevOps | CI, образы, Helm-чарт, k3s/k3d, canary, SOPS, IaC (`.github/`, `deploy/`, `scripts/`, `infra/`) | GitHub Actions, Docker/BuildKit, Trivy, Helm, Kubernetes, ingress-nginx, SOPS/age, Ansible, Terraform, cloud-init |
-| SRE | Метрики, дашборд, алерт, доставка алерта (`deploy/monitoring/`) | Prometheus/PromQL, Grafana, Alertmanager, kube-prometheus-stack |
-
-Имена и личный опыт участников команда указывает сама при сдаче; выдуманных биографий в репозитории нет.
 
 ## Архитектура/схема
 
@@ -267,11 +256,6 @@ make test
 - У api и web RollingUpdate `maxUnavailable: 0`, `maxSurge: 1` и `preStop: sleep 5`: старый под не снимают, пока новый не Ready, и SIGTERM уходит только после паузы, чтобы Endpoints и kube-proxy успели убрать под. Иначе nginx web отдаёт 502. `terminationGracePeriodSeconds: 40` покрывает паузу и штатное завершение; uvicorn по SIGTERM сам перестаёт принимать соединения и дожидается текущих, отдельный обработчик в приложении не добавлялся.
 - Stable: api и web по 2 реплики, PDB `minAvailable: 1`, HPA по CPU (min 2, max 4, 70%). Canary — 1 реплика без PDB и HPA, чтобы шаги веса и `helm uninstall` не ждали лишние поды и `preStop`. Подробности — в «Отказоустойчивость».
 
-### Видео
-
-Требования: до 5 минут, показать работающий стенд, а не установку с нуля; склейка и монтаж допустимы; сгенерированные кадры
-не использовать. Пошаговый сценарий с таймингом — `docs/demo-script.md`. Ролик снимает команда.
-
 ### Что не проверено и ограничения
 
 - **Canary на k3d.** Гейт с отдельным тегом прогнан на box 2026-10-17: доля canary 10% / 49% / 100% при весах 10/50/100, `make k8s-canary-fail` откатил canary. Полный лог в репозиторий не складывался; `docs/cd-demo-log.md` по-прежнему описывает прежний скрипт (тот же тег, что stable, без выборки веса). На кластере не повторялись откат stable при сорванном rollout после promote, допуск счётчика ≥ 95% на весе 100 и доля 5xx по выборке `/ready`, `/`, `/api/v1/service`. Локально для этой правки: `CANARY_SELF_TEST=1 ./scripts/canary.sh`, shellcheck, `make lint`.
@@ -282,7 +266,6 @@ make test
   и `make k8s-netpol-check` честно падает; на GitHub-раннере (обычный kernel) проверка проходит.
 - **ВМ libvirt.** Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально на схеме с `github_token`: Terraform 1.9.8, провайдер 0.8.3 из lock-файла, `fmt -check`, `init -backend=false`, `validate` (без демона libvirt), `cloud-init schema` для `user-data.example.yaml` и `network-config.yaml`. `user-data.yaml.tftpl` схема не принимает: директивы `templatefile` ломают YAML. Живой `terraform apply` на box 2026-10-17 доведён при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false` и `TF_VAR_github_token` (лог `docs/iac-apply-log.md`): загрузка, cloud-init `status: done`, netplan, клон, `vm_ip` совпал с DHCP, затем `terraform destroy`. Переменной `github_token` в коде больше нет: клон по HTTPS без токена; для форка или приватной копии — `github_deploy_key_path`. Этот вариант `apply` не проходил. `terraform fmt -check` и `validate` новой схемы — успех (Terraform 1.9.8, в том числе образ `hashicorp/terraform:1.9.8`). `terraform plan` без apply не дошёл до плана: нет `/var/run/libvirt/libvirt-sock`. Не запускались значения по умолчанию (8 ГиБ / 4 vCPU, `run_make_up=true`) и `make up K3D=0` внутри этой ВМ. Прежний нативный прогон — e2e со старым установщиком; текущая сверка sha256 на кластере не запускалась. До успешного прогона экземпляр box пересоздали (оператор связывает это с нехваткой памяти). Повторный apply после возврата k3d не делался.
 - Доставка алертов: webhook в кластерный `alert-sink` (пишет тело в лог). Почта и мессенджеры не настраивались.
-- Видео: не записано в репозитории, его снимает команда (требования выше).
 - `rollout status` возвращается, когда новые поды Ready, а старые ещё ~5 с отвечают в `preStop` со старым секретом. Поэтому `secrets-rotate.sh` и `secrets-apply.sh` после него ждут, пока старые поды API исчезнут: только после этого старый пароль гарантированно даёт 401. Ожидание идёт по всем подам с меткой `component=api`.
 - Две реплики, PDB `minAvailable: 1`, HPA и egress NetworkPolicy проверены рендером (`helm lint`, `helm template` stable и canary, `make lint` / kubeconform). Живой кластер после этих правок не поднимался: `make k8s-netpol-check`, срабатывание HPA и `make k8s-alert-demo` (он на время проверки снимает HPA `sensor-api`) не повторялись. Прежний e2e проверял только ingress NetworkPolicy.
 
