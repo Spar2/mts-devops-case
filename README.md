@@ -362,26 +362,18 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; �
 - Что проверить дальше: `kubectl -n sensor describe secret sensor-secrets-wrong`, проверить логи контейнера api.
 ```
 
-Реальный вывод повтора (`make llm-gen`, память, 104.27 с, 152 токена, attempts 2, `VALIDATION OK`):
+`docs/llm/examples/prometheusrule-memory.generated.yaml` — ранний английский прогон, не повтор 2026-10-17. В `docs/llm/examples/runs.jsonl` две записи с задачей `Critical when process_resident_memory_bytes is above 400MB for 10m`: `2026-10-17T04:37:27+0300`, 15.71 с, attempts 1, valid, completion_tokens 145; `2026-10-17T04:38:04+0300`, 25.91 с, attempts 1, valid, completion_tokens 145. Текста правила в журнале нет, поэтому файл не привязан к одной из этих двух строк.
 
-```yaml
-        - alert: SensorGatewayMemoryCritical
-          expr: process_resident_memory_bytes{namespace="sensor"} > 400000000
-          for: 10m
-          labels:
-            severity: critical
-```
+Повтор той же темы по-русски (`critical, если process_resident_memory_bytes > 400MB в течение 10m`): `2026-10-17T07:27:17+0000`, 104.27 с, attempts 2, valid, completion_tokens 152. YAML этого повтора в репозитории не сохранён.
 
 Метрика `process_resident_memory_bytes` сервис не отдаёт (в `services/api/app/main.py` нет `prometheus_client` и process collector); пример проверяет только синтаксис PromQL.
 
-Полные примеры и журнал прогонов: `docs/llm/examples/`. Тот же прогон показал и ошибку модели: для задержки она
-написала `sum(service_probe_latency_seconds{...}[2m])` — promtool отверг, исправление тоже не прошло, `make llm-gen`
-завершился с кодом 1 и правило не попало дальше.
+Журнал прогонов — `docs/llm/examples/runs.jsonl`. Повтор rule0 (`critical, если service_probe_latency_seconds > 1 с в течение 2 мин`, 51.11 с, attempts 2, valid false): модель написала `sum(service_probe_latency_seconds{...}[2m])`, promtool отверг range vector, исправление тоже не прошло, `make llm-gen` завершился с кодом 1.
 
 Без ключа и без интернета: после `make llm-up` (единственный выход в сеть — скачивание весов и образов) всё работает
 офлайн, ключи не нужны. **Риски:** малая модель ошибается в смысле PromQL (валидные, но не те выражения) — поэтому
 правило — черновик для ревью, а не автодеплой; объяснение может перепутать
-детали — это подсказка, откат от неё не зависит. Повтор 2026-10-17: правила 16.88 с, 51.11 с и 104.27 с, объяснение 66.67 с.
+детали — это подсказка, откат от неё не зависит. Повтор 2026-10-17: rule0 (задержка) 51.11 с, attempts 2, valid false; rule1 (5xx) 16.88 с, attempts 1, valid true; rule2 (память) 104.27 с, attempts 2, valid true; explain 66.67 с, attempts 1, valid true.
 
 ## Troubleshooting
 
