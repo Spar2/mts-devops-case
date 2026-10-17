@@ -1,4 +1,4 @@
-{{- if .Values.pdb.enabled }}
+{{- if and .Values.pdb.enabled (ne .Values.track "canary") }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -8,7 +8,7 @@ metadata:
     {{- include "sensor-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
 spec:
-  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  minAvailable: {{ .Values.pdb.minAvailable }}
   selector:
     matchLabels:
       {{- include "sensor-gateway.selectorLabels" . | nindent 6 }}
@@ -23,7 +23,7 @@ metadata:
     {{- include "sensor-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/component: web
 spec:
-  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  minAvailable: {{ .Values.pdb.minAvailable }}
   selector:
     matchLabels:
       {{- include "sensor-gateway.selectorLabels" . | nindent 6 }}

@@ -7,6 +7,17 @@ Canary: helm upgrade --install sensor-canary <chart> --namespace {{ .Release.Nam
 {{- end }}
 DEMO_PASSWORD is read from Secret {{ .Values.existingSecret }}, key DEMO_PASSWORD.
 API Service {{ .Release.Name }}-api port http:8000. Web Service {{ .Release.Name }}-web port http:80.
+{{- if eq .Values.track "canary" }}
+Canary runs 1 replica of api and web, with no PodDisruptionBudget and no HPA.
+{{- else }}
+Stable runs {{ .Values.api.replicas }} api and {{ .Values.web.replicas }} web replicas.
+{{- if .Values.pdb.enabled }}
+PodDisruptionBudget minAvailable {{ .Values.pdb.minAvailable }} for api and web.
+{{- end }}
+{{- if .Values.hpa.enabled }}
+HPA (CPU {{ .Values.hpa.targetCPUUtilizationPercentage }}%, min {{ .Values.hpa.minReplicas }}, max {{ .Values.hpa.maxReplicas }}) targets api and web. A missing metrics API does not block the rollout.
+{{- end }}
+{{- end }}
 {{- if .Values.serviceMonitor.enabled }}
 ServiceMonitor {{ .Release.Name }}-api (label release=mon, path /metrics) is applied when monitoring.coreos.com/v1/ServiceMonitor exists.
 Web nginx returns 403 for /metrics. Prometheus scrapes the API Service, not the Ingress.

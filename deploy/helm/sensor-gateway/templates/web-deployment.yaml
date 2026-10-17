@@ -7,7 +7,7 @@ metadata:
     {{- include "sensor-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/component: web
 spec:
-  replicas: {{ .Values.web.replicas }}
+  replicas: {{ include "sensor-gateway.componentReplicas" (dict "root" . "component" "web") }}
   revisionHistoryLimit: 3
   selector:
     matchLabels:
