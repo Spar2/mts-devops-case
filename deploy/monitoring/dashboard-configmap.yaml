@@ -222,7 +222,7 @@ data:
         {
           "id": 4,
           "type": "timeseries",
-          "title": "service_probe_latency_seconds",
+          "title": "Задержка probe службы",
           "description": "Latency of the latest POST /api/v1/service/probe. Alert threshold is 0.5s.",
           "datasource": {
             "type": "prometheus",
@@ -303,7 +303,9 @@ data:
                 "fillOpacity": 15,
                 "showPoints": "never",
                 "spanNulls": false
-              }
+              },
+              "min": 0,
+              "max": 1
             },
             "overrides": []
           },

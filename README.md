@@ -29,8 +29,8 @@
 
 | Требование | Где лежит | Как проверить | Статус проверки |
 | --- | --- | --- | --- |
-| Запуск ≤ 3 командами | `Makefile` (`make up`) | `git clone … && cd mts-devops-case && make up` | Проверено свежим клоном на box: вход, probe, 401 без cookie, `/metrics` |
-| IaC: кластер | `scripts/k3s-install.sh`, `infra/ansible/site.yml` | `make k8s-up` / `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` | Проверено в режиме k3d (k3s v1.31.4) свежим клоном с чистого старта (2 мин 38 с), лог `docs/k8s-up-log.md`; плейбук прогнан, `failed=0`. Нативный k3s на box не ставился (см. «Что не проверено») |
+| Запуск ≤ 3 командами | `Makefile` (`make up`) | `git clone … && cd mts-devops-case && make up` | Проверено: свежий клон e0fe907 на box без кластера, `make up` за 2 мин 0 с (smoke: вход, probe, 401 без cookie, `/metrics`); повторный `make k8s-up K3D=1` идемпотентен (1 мин 11 с). Тот же путь — в e2e GitHub Actions на каждый push в `main` |
+| IaC: кластер | `scripts/k3s-install.sh`, `infra/ansible/site.yml` | `make k8s-up` / `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` | k3d: свежий клон на box и e2e; нативный k3s (`make up K3D=0`): только e2e на `ubuntu-24.04`. Лог `docs/k8s-up-log.md`; плейбук прогонялся раньше, `failed=0` |
 | IaC: ВМ | `infra/cloud-init/`, `infra/terraform/` (libvirt) | `terraform validate`, `cloud-init schema` | Валидация проходит. `terraform apply` на box не доведён (см. «Что не проверено») |
 | CI: линт, тесты, сборка | `.github/workflows/ci.yml` | вкладка Actions | Зелёный прогон на GitHub (jobs lint, api, web, helm, manifests, dockerfiles, shellcheck, images) |
 | Сканирование образов | там же, `trivy-action` v0.36.0 (сканер Trivy v0.70.0), HIGH/CRITICAL; SBOM (anchore/sbom-action) на `main` | Actions → images | Trivy нашёл реальные CVE (Starlette, OpenSSL в alpine), исправлено обновлением, прогон зелёный |
@@ -233,7 +233,7 @@ make down                # удалить кластер (и Compose-демо, �
 
   ![Grafana](docs/img/grafana-sensor-gateway.png)
 
-  Скриншот снят до последней правки дашборда (панели «живые таргеты» и «доля 5xx» на нём ещё нет).
+  Скриншот снят 2026-10-17 на k3d-стенде из свежего клона (`scripts/grafana-screenshot.py`, headless Chrome).
 
 - Алерты (`deploy/monitoring/prometheusrule.yaml`):
   - `SensorGatewayDown` (critical): 1 минуту нет ни одного живого таргета API: `(sum(up{namespace="sensor",service=~".*-api"}) or vector(0)) == 0`;

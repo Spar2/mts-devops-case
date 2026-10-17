@@ -59,3 +59,17 @@ MAKE_EXIT 0
 `PASS deploy sensor 2a83762`, `real 2m37s`, Grafana через ingress — 200. На том же стенде:
 `scripts/canary-fail-demo.sh` → `ROLLBACK canary: smoke failed at weight 10`, stable отвечает;
 `scripts/rollback-demo.sh` → `UPGRADE FAILED … rolled back due to atomic`, `helm history`: `Rollback to 1`.
+
+## Свежий клон, 2026-10-17 06:07–06:13 MSK (box, k3d)
+
+k3d-кластер `mts` перед прогоном удалён (`k3d cluster delete mts`). Затем `git clone https://github.com/Spar2/mts-devops-case.git /tmp/fresh2 && cd /tmp/fresh2 && make up` на коммите e0fe907.
+Переменные песочницы (на обычной Ubuntu не нужны): `K3D_EXTRA_ARGS` (flannel host-gw), `INGRESS_SERVICE_TYPE=NodePort`, `K3D_PRELOAD=1`, `INGRESS_PORT=18081` (port-forward), `K3D_LB_PORT=8081`.
+
+```text
+PASS deploy sensor e0fe907
+Приложение: http://sensor.localtest.me:18081  логин demo, пароль: <печатает make status>
+Grafana:    http://grafana.localtest.me:18081  логин admin, пароль (дашборд sensor-gateway): <печатает make status>
+real	1m59.912s
+```
+
+Повторный `make k8s-up K3D=1` в том же клоне: `PASS deploy sensor e0fe907`, `real 1m10.993s` (идемпотентно).
