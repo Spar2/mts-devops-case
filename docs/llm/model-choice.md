@@ -4,13 +4,15 @@
 Рантайм для всех моделей одинаковый: официальный образ `ghcr.io/ggml-org/llama.cpp:server-b11681`
 (upstream llama.cpp, без форков), `-t 6`, `--memory 2g`, temperature 0, seed 42. Дата: 2026-10-17.
 
-Задачи (одинаковые для всех, `llm/llm_gen.py`, промпты в `llm/prompts/`):
+Таблица ниже (колонки «Генерация», «Prompt», «Память» и отметки ✔/✘) — прежний замер на английских задачах, `-t 6`. Колонка «Валидно» у Ternary-Bonsai-2-4B к нему не относится: это русский повтор 2026-10-17 (`-t 4`). Остальные модели на русских фразах не запускались. `make llm-gen` без `DESC` берёт из Makefile английскую фразу `Critical alert when service_probe_latency_seconds is above 1 second for 2 minutes`, не rule0 ниже. Точные английские строки и секунды выбранной модели — в абзаце про `runs.jsonl`.
+
+Русские фразы — только повтор Ternary-Bonsai-2-4B (`llm/llm_gen.py`, промпты в `llm/prompts/`):
 1. `rule0`: «critical, если service_probe_latency_seconds > 1 с в течение 2 мин» → PrometheusRule.
 2. `rule1`: «warning, если rate 5xx в http_requests_total за 5m > 0.1/с в течение 5m».
 3. `rule2`: «critical, если process_resident_memory_bytes > 400MB в течение 10m».
 4. `explain`: объяснить провал canary и откат по логу `llm/examples/canary-fail.log` (выдержка из `docs/cd-demo-log.md`).
 
-Задачи выше — снимок замера. `process_resident_memory_bytes` и метки `status`/`path` у `http_requests_total` сервис не отдаёт: `/metrics` в `services/api/app/main.py` пишет сам, без `prometheus_client` и process collector. Текущий список в `llm/llm_gen.py`: `up`, `service_up`, `service_probe_latency_seconds`, `http_requests_total`.
+Фразы выше — текст этого повтора, не задач остальных строк таблицы. `process_resident_memory_bytes` и метки `status`/`path` у `http_requests_total` сервис не отдаёт: `/metrics` в `services/api/app/main.py` пишет сам, без `prometheus_client` и process collector. Текущий список в `llm/llm_gen.py`: `up`, `service_up`, `service_probe_latency_seconds`, `http_requests_total`.
 
 «Валидно» = прошёл YAML + структура + `release: mon` + `promtool check rules` (Prometheus v2.54.1), допускался один
 раунд исправления по ошибкам валидатора. «Смысл» — ручная проверка выражения человеком.

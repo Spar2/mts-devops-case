@@ -1,3 +1,9 @@
+# Ранний английский прогон, не повтор 2026-10-17.
+# Задача в docs/llm/examples/runs.jsonl: Critical when process_resident_memory_bytes is above 400MB for 10m
+# 2026-10-17T04:37:27+0300 — 15.71 с, attempts 1, valid true, completion_tokens 145
+# 2026-10-17T04:38:04+0300 — 25.91 с, attempts 1, valid true, completion_tokens 145
+# Текста правила в журнале нет: файл не привязан к одной из этих двух строк.
+# Повтор по-русски (2026-10-17T07:27:17+0000, 104.27 с, attempts 2, valid true, completion_tokens 152) в репозитории YAML не оставил.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
