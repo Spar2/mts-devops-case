@@ -45,7 +45,7 @@
 | Сеть ВМ (netplan) | `infra/cloud-init/network-config.yaml` → `libvirt_cloudinit_disk.network_config` | `cloud-init schema` (job `iac`); в госте `sudo netplan get`, `ip addr` | Схема валидна (cloud-init 26.1, job `iac`). На ВМ 2026-10-17: DHCP, `match: en*`, `ens3` получил `192.168.122.188/24`; адрес совпал с `terraform output vm_ip` и арендой libvirt |
 | Безопасность подов | securityContext, NetworkPolicy, PDB в чарте | `make k8s-netpol-check` | NetworkPolicy проверена в e2e на GitHub (чужой namespace → BLOCKED, web → API → REACHED) |
 | Доставка алерта | Alertmanager → webhook `alert-sink` | `make k8s-alert-demo` | Проверено: firing → webhook → resolved (e2e и box) |
-| LLM: генерация конфигов с фиксацией промптов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Замер выбора модели: 3/3 YAML+promtool с первой попытки (`docs/llm/model-choice.md`). В `docs/llm/examples/runs.jsonl` четыре записи `task=rule`: три valid (5xx и дважды memory), задержка отвергнута promtool со второй попытки; таблица 3/3 этим файлом не подтверждается. Job `llm` в CI |
+| LLM: генерация конфигов с фиксацией промптов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Повтор 2026-10-17 (`make llm-up`, `-t 4`): из трёх фраз в `docs/llm/model-choice.md` с первой попытки valid одна (5xx, 16.88 с). Задержка invalid, attempts 2, 51.11 с. Память valid со 2-й, 104.27 с. Explain valid, 66.67 с. Оба прогона в `docs/llm/examples/runs.jsonl`. Job `llm` в CI |
 | Видео ≤ 5 мин | `docs/demo-script.md` | — | Сценарий готов, ролик снимает команда |
 
 ## Состав команды (роли, опыт и навыки)
@@ -316,12 +316,13 @@ make test
   файл `Ternary-Bonsai-2-4B-Q2_0.gguf` (тернарные веса), **1.21 ГБ**, лицензия **Apache-2.0**, без gated-доступа и токена.
   sha256 `64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4` (проверяется скриптом).
 - **Почему она:** из 7 замеренных моделей (Bonsai 1.7B/4B/8B 1-бит, Ternary-Bonsai-2 2B/4B, Qwen2.5-Coder 0.5B/1.5B)
-  единственная дала 3/3 правила, прошедших YAML + promtool с первой попытки, и объяснение отката без фактических ошибок.
-  Таблица замеров — `docs/llm/model-choice.md`. Сохранённый `docs/llm/examples/runs.jsonl` эту таблицу 3/3 не подтверждает.
+  оставлена моделью по умолчанию: Apache-2.0, без токена, файл 1.21 ГБ, upstream llama.cpp. Ток/с и память в
+  `docs/llm/model-choice.md` — прежний замер `-t 6`, в повтор 2026-10-17 не входили. Этот повтор (`make llm-up` по умолчанию, `-t 4`):
+  три фразы из того файла, с первой попытки valid одна из трёх (5xx, 16.88 с). Задержка 51.11 с, attempts 2, valid false.
+  Память 104.27 с, valid со второй попытки. `make llm-explain` — 66.67 с, attempts 1, valid. Журнал обоих прогонов — `docs/llm/examples/runs.jsonl`.
 - **Рантайм:** официальный `ghcr.io/ggml-org/llama.cpp:server-b11681` (upstream, форк PrismML не нужен), OpenAI-совместимый
   API на `127.0.0.1:8090`, только CPU (AVX2), лимит контейнера 2 ГБ.
-- **Ресурсы:** пиковый RSS 1.66 ГБ (0.47 ГБ анонимной + 1.19 ГБ отображённых весов), 14.5 ток/с генерации (замер на 6 потоках, `LLM_THREADS=6`; по умолчанию `scripts/llm-up.sh` берёт `-t 4`);
-  правило 16–26 с, объяснение ~50 с. Для 8 ГБ машин: `LLM_NAME=ternary-bonsai-2-2b` (0.55 ГБ, ~0.7 ГиБ, 38 ток/с, слабее).
+- **Ресурсы:** пиковый RSS 1.66 ГБ (0.47 ГБ анонимной + 1.19 ГБ отображённых весов) и 14.5 ток/с — прежний замер на 6 потоках (`LLM_THREADS=6`), в повторе 2026-10-17 не снимались. По умолчанию `scripts/llm-up.sh` берёт `-t 4`. Времена повтора — выше и в `docs/llm/model-choice.md`. Для 8 ГБ машин: `LLM_NAME=ternary-bonsai-2-2b` (0.55 ГБ, ~0.7 ГиБ, 38 ток/с, слабее; в этот день не перезапускалась).
 
 ```bash
 make llm-up                       # скачать веса с HF (sha256) в llm/models/ и запустить llama-server
@@ -351,19 +352,21 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; �
 Каждый запуск пишет в `llm/out/runs.jsonl`: модель, seed 42, temperature 0, файл системного промпта, полный пользовательский запрос (поле `user`; для explain — с хвостом лога), время, токены,
 результат валидации. Промпты — `llm/prompts/*.txt`.
 
-Реальный вывод `make llm-explain` (52.5 с, проверки пройдены):
+Реальный вывод `make llm-explain` повтора 2026-10-17 (66.67 с, attempts 1, проверки пройдены):
 
 ```text
 - Что упало: проверка smoke `login` вернула HTTP 401 вместо 200 и отсутствовал сессионный токен `dts_session`.
 - Что сделал конвейер: вес canary выставлен в 0, релиз sensor-canary удалён через helm uninstall.
 - Затронут ли stable: нет — smoke stable прошёл успешно (HTTP 200, cookie dts_session).
+- Вероятная причина: canary не готов к работе из-за отсутствия валидного секрета (использовался `sensor-secrets-wrong`).
+- Что проверить дальше: `kubectl -n sensor describe secret sensor-secrets-wrong`, проверить логи контейнера api.
 ```
 
-Реальный вывод (`make llm-gen`, 15.7 с, 145 токенов, `VALIDATION OK`):
+Реальный вывод повтора (`make llm-gen`, память, 104.27 с, 152 токена, attempts 2, `VALIDATION OK`):
 
 ```yaml
         - alert: SensorGatewayMemoryCritical
-          expr: process_resident_memory_bytes > 400000000
+          expr: process_resident_memory_bytes{namespace="sensor"} > 400000000
           for: 10m
           labels:
             severity: critical
@@ -378,7 +381,7 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; �
 Без ключа и без интернета: после `make llm-up` (единственный выход в сеть — скачивание весов и образов) всё работает
 офлайн, ключи не нужны. **Риски:** малая модель ошибается в смысле PromQL (валидные, но не те выражения) — поэтому
 правило — черновик для ревью, а не автодеплой; объяснение может перепутать
-детали — это подсказка, откат от неё не зависит; генерация занимает до минуты.
+детали — это подсказка, откат от неё не зависит. Повтор 2026-10-17: правила 16.88 с, 51.11 с и 104.27 с, объяснение 66.67 с.
 
 ## Troubleshooting
 
