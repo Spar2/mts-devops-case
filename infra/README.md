@@ -50,30 +50,38 @@ install -m 0755 "$tmp/terraform" ~/.local/bin/terraform
 
 ## Запуск
 
-Репозиторий приватный. Токен передаётся переменной и попадает в cloud-init только при `apply`. В git его нет.
+Переменной `github_token` нет. cloud-init клонирует `repo_url` без токена. Значение по умолчанию — публичный HTTPS. Приватный репозиторий — отдельный deploy-key и SSH URL, не PAT.
 
 ```bash
 cd infra/terraform
 terraform init
 terraform apply \
-  -var "ssh_public_key=$(cat ~/.ssh/id_ed25519.pub)" \
-  -var "github_token=$GITHUB_TOKEN"
+  -var "ssh_public_key=$(cat ~/.ssh/id_ed25519.pub)"
 terraform output vm_ip
 ```
 
-Тот же токен можно задать через `TF_VAR_github_token`. Файл `terraform.tfvars` с токеном не коммитить. Каталоги `.terraform/` и `terraform.tfstate` локальные. В репозитории остаётся `.terraform.lock.hcl`: провайдер зафиксирован на `0.8.3` при ограничении `~> 0.8.1`.
+Приватный репозиторий (ключ только на хосте, в git не класть):
+
+```bash
+terraform apply \
+  -var "ssh_public_key=$(cat ~/.ssh/id_ed25519.pub)" \
+  -var "github_deploy_key_path=$HOME/.ssh/mts_deploy_key" \
+  -var "repo_url=git@github.com:Spar2/mts-devops-case.git"
+```
+
+Тот же путь можно задать через `TF_VAR_github_deploy_key_path`. Файл `terraform.tfvars` с путём к ключу не коммитить. Каталоги `.terraform/` и `terraform.tfstate` локальные. В репозитории остаётся `.terraform.lock.hcl`: провайдер зафиксирован на `0.8.3` при ограничении `~> 0.8.1`.
 
 | Переменная | По умолчанию | Смысл |
 | --- | --- | --- |
-| `repo_url` | `https://github.com/Spar2/mts-devops-case.git` | Что клонировать |
-| `github_token` | пустая строка, `sensitive` | Токен GitHub для HTTPS. Пустая строка — clone без авторизации |
+| `repo_url` | `https://github.com/Spar2/mts-devops-case.git` | Что клонировать. С deploy-key — SSH URL |
+| `github_deploy_key_path` | пустая строка, `sensitive` | Абсолютный путь на хосте Terraform к приватному deploy-key. Пустая строка — HTTPS без секрета |
 | `ssh_public_key` | пустая строка | Ключ в `~ubuntu/.ssh/authorized_keys`. Пустая строка — ключ не добавляется |
 | `libvirt_uri` | `qemu:///system` | Куда подключается провайдер |
 | `vm_vcpu` | `4` | Число vCPU |
 | `vm_memory_mib` | `8192` | RAM ВМ в МиБ |
 | `run_make_up` | `true` | После клона запустить `make up K3D=0`. `false` — только пакеты, пользователь и клон |
 
-`github_token` и `repo_url` без перевода строки. В URL нет одинарной кавычки: он подставляется в одинарные кавычки shell.
+`repo_url` без перевода строки и без одинарной кавычки: URL подставляется в одинарные кавычки shell. `github_deploy_key_path` — абсолютный путь без перевода строки. Ansible токен и deploy-key не передаёт: плейбук только вызывает `make k8s-up` на уже склонированном дереве.
 
 Для малой ВМ без k3s в госте: `-var vm_memory_mib=2048 -var vm_vcpu=2 -var run_make_up=false`. По умолчанию `run_make_up=true`, ресурсы — 4 vCPU и 8192 МиБ.
 
@@ -90,7 +98,7 @@ sudo tail -f /var/log/mts-k8s-up.log
 
 1. Пакеты `git`, `make`, `curl`, `docker.io`, `docker-compose-v2`.
 2. Группа `docker` создаётся до пользователя. `ubuntu` — default user облачного образа — входит в неё (`users` и повторный `usermod` в `runcmd`, уже после установки пакета).
-3. Клон `repo_url` в `/home/ubuntu/mts-devops-case` от `ubuntu`. Если токен задан, на время clone пишется `/home/ubuntu/.netrc` (`login x-access-token`), затем файл удаляется. В лог токен не попадает.
+3. Клон `repo_url` в `/home/ubuntu/mts-devops-case` от `ubuntu`. Без `github_deploy_key_path` — `git clone` по HTTPS, `GIT_TERMINAL_PROMPT=0`, файлов с секретом нет. С путём к ключу Terraform кладёт в user-data base64 ключа (`/root/.config/mts/github-deploy-key.b64`). `runcmd` декодирует его в `/home/ubuntu/.ssh/github-deploy-key` (0600), клонирует по SSH (`IdentitiesOnly`, `StrictHostKeyChecking=yes`, known_hosts только с ed25519-ключом `github.com` из `api.github.com/meta`, снимок 2026-10-17) и удаляет оба файла ключа (`trap` на выходе тоже). Если ключ задан, а `repo_url` не `git@…` и не `ssh://`, скрипт выходит с ошибкой до clone. В лог ключ не пишется. Копия user-data остаётся в ISO cloud-init и в `/var/lib/cloud/instance/` на диске гостя, а содержимое ключа — в state Terraform, пока ключ передавали. `*.tfstate` в `.gitignore`.
 4. Если `run_make_up` истинно (по умолчанию) — `sudo -u ubuntu make up K3D=0`. stdout и stderr — `/var/log/mts-k8s-up.log`. При `false` в тот же лог пишется `run_make_up=false: skip make up K3D=0`, k3s не запускается.
 
 `runcmd` cloud-init записывает в config-стадии, а выполняет `scripts-user` в final-стадии, после установки пакетов.
@@ -108,12 +116,14 @@ cloud-init schema -c infra/cloud-init/user-data.example.yaml
 
 Те же команды и `cloud-init schema --schema-type network-config` выполняет job `iac` в `.github/workflows/ci.yml` (Terraform 1.9.8, cloud-init из архива Ubuntu 24.04, локально проверено 26.1; job зелёный на GitHub, pull request #3). `user-data.yaml.tftpl` в `cloud-init schema` не проходит: это шаблон `templatefile`, не готовый cloud-config.
 
-- `terraform validate` проверяет синтаксис HCL, ссылки между ресурсами и аргументы провайдера `dmacvicar/libvirt` `~> 0.8.1`: один домен, том 30 ГиБ, cloud-init из `user-data.yaml.tftpl`. vCPU, RAM и `run_make_up` — переменные; по умолчанию 4, 8192 и `true`.
-- `cloud-init schema` сверяет пример рендера со схемой cloud-config. Пример — ветка `run_make_up=true`: URL репозитория, плейсхолдер `__GITHUB_TOKEN__` и строка-заглушка SSH-ключа. Это вход для схемы, не секрет и не ключ доступа. На хосте без datasource cloud-init пишет предупреждение и при успехе печатает `Valid schema`.
+- `terraform validate` проверяет синтаксис HCL, ссылки между ресурсами и аргументы провайдера `dmacvicar/libvirt` `~> 0.8.1`: один домен, том 30 ГиБ, cloud-init из `user-data.yaml.tftpl`. vCPU, RAM и `run_make_up` — переменные; по умолчанию 4, 8192 и `true`. `github_token` удалён. `github_deploy_key_path` по умолчанию пустой: `filebase64` не вызывается.
+- `cloud-init schema` сверяет пример рендера со схемой cloud-config. Пример — ветка `run_make_up=true` без deploy-key: URL репозитория и строка-заглушка SSH-ключа для входа на ВМ. Это вход для схемы, не ключ доступа и не deploy-key. На хосте без datasource cloud-init пишет предупреждение и при успехе печатает `Valid schema`.
 
-Живой `terraform apply` на box (2026-10-17) записан в `docs/iac-apply-log.md`. Домен `mts-sensor` загрузился при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false`: cloud-init `status: done`, netplan из `network-config.yaml` (DHCP, `match: en*`), пользователь `ubuntu`, пакеты, клон, `terraform output vm_ip` совпал с DHCP-арендой. После проверки — `terraform destroy`, state и тома удалены. `make up K3D=0` внутри этой ВМ не выполнялся. Значения по умолчанию (8 ГиБ / 4 vCPU / `run_make_up=true`) на живой ВМ не проверялись. Хост прогона — контейнер Debian 13 без systemd: демоны libvirt запускались вручную, подробности только в логе. Повторный apply после возврата k3d не делался: в логе один прогон.
+Новая схема (без `github_token`) на этой ветке: `terraform fmt -check` и `terraform validate` успешны на Terraform 1.9.8 — и из `~/.local/bin`, и в контейнере `hashicorp/terraform:1.9.8`. `terraform plan -input=false -lock=false -refresh=false` без apply не построил план: провайдер не подключился к `/var/run/libvirt/libvirt-sock` (сокета нет). State не создавался, ВМ не запускалась. `cloud-init schema` (пакет на хосте 25.1.4) для `user-data.example.yaml` (рендер `run_make_up=true`, заглушка SSH-ключа, без deploy-key) — `Valid schema`. Отдельно, во временных файлах, та же схема приняла рендер без SSH-ключа, с `run_make_up=false` и с непустым `github_deploy_key_b64` (муляж, не ключ). Эти три файла в git не коммитятся.
 
-Рендер с пустым токеном и пустым ключом тоже проходит схему. В git лежит вариант с плейсхолдерами.
+Живой `terraform apply` на box (2026-10-17) записан в `docs/iac-apply-log.md`. Он шёл по старой схеме: в user-data передавался `github_token` (`TF_VAR_github_token`). В текущем коде этой переменной нет, повторный apply новой схемы не делался. Домен `mts-sensor` загрузился при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false`: cloud-init `status: done`, netplan из `network-config.yaml` (DHCP, `match: en*`), пользователь `ubuntu`, пакеты, клон, `terraform output vm_ip` совпал с DHCP-арендой. После проверки — `terraform destroy`, state и тома удалены. `make up K3D=0` внутри этой ВМ не выполнялся. Значения по умолчанию (8 ГиБ / 4 vCPU / `run_make_up=true`) на живой ВМ не проверялись. Хост прогона — контейнер Debian 13 без systemd: демоны libvirt запускались вручную, подробности только в логе. Повторный apply после возврата k3d не делался: в логе один прогон.
+
+Рендер без deploy-key и с пустым SSH-ключом для входа тоже проходит схему. В git лежит вариант с заглушкой SSH-ключа и без deploy-key. Ветка с непустым `github_deploy_key_b64` в коммите не лежит: это был бы ключ или его муляж внутри user-data. Её схема проверяется локально отдельным рендером и в репозиторий не коммитится.
 
 ## Сеть (netplan) и OpenStack
 

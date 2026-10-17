@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # Idempotent cluster bootstrap.
 # Default: k3s v1.31.4+k3s1, traefik off, ServiceLB on, kubeconfig mode 600 (копия для пользователя в ~/.kube/config, 600).
-# K3D=1: k3d cluster "mts" (rancher/k3s:v1.31.4-k3s1, host port 8081 -> LB 80).
+# K3D=1: k3d cluster "$CLUSTER" (default mts; rancher/k3s:v1.31.4-k3s1, host port 8081 -> LB 80).
 # K3D_LB_PORT: host port of the k3d loadbalancer (default INGRESS_PORT, else 8081).
 # Then Helm 3.16.3 if missing, and ingress-nginx 4.11.3 as a LoadBalancer
 # without hostNetwork (k3s ServiceLB publishes it).
+# helm/kubectl/k3d скачиваются только если нужной версии ещё нет, и сверяются с sha256
+# официальных файлов релизов (суммы ниже, сняты 2026-10-17):
+#   https://get.helm.sh/helm-v3.16.3-linux-<arch>.tar.gz.sha256sum
+#   https://dl.k8s.io/release/v1.31.4/bin/linux/<arch>/kubectl.sha256
+#   https://github.com/k3d-io/k3d/releases/download/v5.8.3/checksums.txt
+#     (_dist/k3d-linux-amd64, _dist/k3d-linux-arm64)
 set -euo pipefail
 
 K3S_VERSION="v1.31.4+k3s1"
@@ -15,6 +21,8 @@ K3D_VERSION="v5.8.3"
 INGRESS_NGINX_VERSION="4.11.3"
 INGRESS_NGINX_REPO="https://kubernetes.github.io/ingress-nginx"
 K3D="${K3D:-0}"
+CLUSTER="${CLUSTER:-mts}"
+export CLUSTER
 
 linux_arch() {
   case "$(uname -m)" in
@@ -25,6 +33,55 @@ linux_arch() {
       return 1
       ;;
   esac
+}
+
+# Два пробела — формат sha256sum -c.
+verify_sha256() {
+  local file="$1" sum="$2" label="$3"
+  if ! echo "${sum}  ${file}" | sha256sum -c -; then
+    echo "sha256 не совпал: ${label}" >&2
+    exit 1
+  fi
+}
+
+helm_sha() {
+  case "$1" in
+    amd64) echo f5355c79190951eed23c5432a3b920e071f4c00a64f75e077de0dd4cb7b294ea ;;
+    arm64) echo 5bd34ed774df6914b323ff84a0a156ea6ff2ba1eaf0113962fa773f3f9def798 ;;
+    *)
+      echo "нет sha256 helm для архитектуры $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+kubectl_sha() {
+  case "$1" in
+    amd64) echo 298e19e9c6c17199011404278f0ff8168a7eca4217edad9097af577023a5620f ;;
+    arm64) echo b97e93c20e3be4b8c8fa1235a41b4d77d4f2022ed3d899230dbbbbd43d26f872 ;;
+    *)
+      echo "нет sha256 kubectl для архитектуры $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+k3d_sha() {
+  case "$1" in
+    amd64) echo dbaa79a76ace7f4ca230a1ff41dc7d8a5036a8ad0309e9c54f9bf3836dbe853e ;;
+    arm64) echo 0b8110f2229631af7402fb828259330985918b08fefd38b7f1b788a1c8687216 ;;
+    *)
+      echo "нет sha256 k3d для архитектуры $1" >&2
+      return 1
+      ;;
+  esac
+}
+
+check_cluster_name() {
+  if [[ ! "${CLUSTER}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+    echo "CLUSTER должен быть именем k3d: строчные латинские буквы, цифры и дефис (сейчас: ${CLUSTER})" >&2
+    exit 1
+  fi
 }
 
 run_root() {
@@ -44,6 +101,7 @@ install_helm() {
   arch="$(linux_arch)"
   tmp="$(mktemp -d)"
   curl -fsSL -o "${tmp}/helm.tgz" "https://get.helm.sh/helm-${HELM_VERSION}-linux-${arch}.tar.gz"
+  verify_sha256 "${tmp}/helm.tgz" "$(helm_sha "${arch}")" "helm ${HELM_VERSION} linux-${arch}.tar.gz"
   tar -xzf "${tmp}/helm.tgz" -C "${tmp}"
   run_root install -m 0755 "${tmp}/linux-${arch}/helm" /usr/local/bin/helm
   rm -rf "${tmp}"
@@ -60,6 +118,7 @@ install_kubectl() {
   arch="$(linux_arch)"
   tmp="$(mktemp)"
   curl -fsSL -o "${tmp}" "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl"
+  verify_sha256 "${tmp}" "$(kubectl_sha "${arch}")" "kubectl ${KUBECTL_VERSION} linux-${arch}"
   run_root install -m 0755 "${tmp}" /usr/local/bin/kubectl
   rm -f "${tmp}"
   hash -r
@@ -75,6 +134,7 @@ install_k3d() {
   arch="$(linux_arch)"
   tmp="$(mktemp)"
   curl -fsSL -o "${tmp}" "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-${arch}"
+  verify_sha256 "${tmp}" "$(k3d_sha "${arch}")" "k3d ${K3D_VERSION} linux-${arch}"
   run_root install -m 0755 "${tmp}" /usr/local/bin/k3d
   rm -f "${tmp}"
   hash -r
@@ -132,11 +192,22 @@ install_k3s() {
 }
 
 k3d_cluster_exists() {
-  k3d cluster list -o json 2>/dev/null | grep -Eq '"name"[[:space:]]*:[[:space:]]*"mts"'
+  k3d cluster list -o json 2>/dev/null | grep -Eq '"name"[[:space:]]*:[[:space:]]*"'"${CLUSTER}"'"'
 }
 
 k3d_server_running() {
-  docker ps --format '{{.Names}}' | grep -qx 'k3d-mts-server-0'
+  docker ps --format '{{.Names}}' | grep -qx "k3d-${CLUSTER}-server-0"
+}
+
+# Уже созданный кластер k3d не пересоздаётся: образ, порт и K3D_EXTRA_ARGS этого запуска
+# к нему не применяются. Молча это не оставляем.
+warn_existing_cluster() {
+  local port extra
+  port="${K3D_LB_PORT:-${INGRESS_PORT:-8081}}"
+  extra="${K3D_EXTRA_ARGS:-<не заданы>}"
+  echo "предупреждение: k3d-кластер ${CLUSTER} уже существует, k3d cluster create не вызывается." >&2
+  echo "Не применяются: образ ${K3S_IMAGE}, проброс ${port}:80@loadbalancer, K3D_EXTRA_ARGS=${extra}." >&2
+  echo "Кластер остаётся со своими параметрами. Пересоздать: k3d cluster delete ${CLUSTER}" >&2
 }
 
 install_k3d_cluster() {
@@ -144,19 +215,21 @@ install_k3d_cluster() {
     echo "K3D=1 requires docker" >&2
     exit 1
   fi
+  check_cluster_name
   install_k3d
   install_kubectl
   if k3d_cluster_exists; then
-    echo "k3d cluster mts already exists"
+    warn_existing_cluster
+    echo "k3d cluster ${CLUSTER} already exists"
     if k3d_server_running; then
-      echo "k3d cluster mts is already running"
+      echo "k3d cluster ${CLUSTER} is already running"
     else
-      k3d cluster start mts
+      k3d cluster start "${CLUSTER}"
     fi
   else
     # K3D_EXTRA_ARGS: e.g. "--k3s-arg --flannel-backend=host-gw@server:0" where vxlan is unavailable.
     # shellcheck disable=SC2086
-    k3d cluster create mts \
+    k3d cluster create "${CLUSTER}" \
       --image "${K3S_IMAGE}" \
       --k3s-arg "--disable=traefik@server:0" \
       ${K3D_EXTRA_ARGS:-} \
@@ -166,8 +239,8 @@ install_k3d_cluster() {
   fi
   mkdir -p "${HOME}/.kube"
   export KUBECONFIG="${HOME}/.kube/config"
-  k3d kubeconfig merge mts --kubeconfig-merge-default --kubeconfig-switch-context
-  kubectl config use-context k3d-mts >/dev/null
+  k3d kubeconfig merge "${CLUSTER}" --kubeconfig-merge-default --kubeconfig-switch-context
+  kubectl config use-context "k3d-${CLUSTER}" >/dev/null
   if [[ "${K3D_PRELOAD:-0}" == "1" ]]; then
     "$(dirname "$0")/k3d-preload-images.sh"
   fi

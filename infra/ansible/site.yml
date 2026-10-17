@@ -2,8 +2,8 @@
 # Плейбук-обёртка над единой точкой входа `make k8s-up`, чтобы логика установки
 # (k3s, ingress-nginx, SOPS-секрет, kube-prometheus-stack, Helm-релиз) не дублировалась.
 # Запуск: ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml
-# Переменные окружения (K3D, K3D_PRELOAD, INGRESS_SERVICE_TYPE, INGRESS_PORT, TAG...)
-# передаются в make как есть.
+# Переменные окружения (K3D, CLUSTER, K3D_PRELOAD, INGRESS_SERVICE_TYPE, INGRESS_PORT, TAG...)
+# передаются в make как есть. CLUSTER по умолчанию mts (имя k3d-кластера).
 - name: Sensor gateway cluster
   hosts: localhost
   connection: local
