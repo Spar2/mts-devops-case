@@ -198,7 +198,7 @@ make down                # удалить кластер (и Compose-демо, �
   релиз сам. Затем `scripts/smoke.sh` (`/ready`, `/metrics`, 401 без cookie, вход, `/api/v1/service`, probe); при провале
   `helm rollback sensor 0`, а если это была первая установка (откатываться некуда) — `helm uninstall sensor`.
 - `scripts/canary.sh TAG` — релиз `sensor-canary` с аннотациями ingress-nginx `canary`, `canary-weight`, `canary-by-header: X-Canary`.
-  На каждом шаге: smoke через `X-Canary: always`, ожидание target canary в Prometheus (до 180 с), нагрузка через ingress, затем PromQL:
+  На каждом шаге: smoke через `X-Canary: always`, ожидание target canary в Prometheus (до 300 с), нагрузка через ingress, затем PromQL:
   `min(up{namespace="sensor",service="sensor-canary-api"}) == 1`;
   `sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m])) > 0`
   (запросы именно через canary-апстрим ingress-nginx, пробы kubelet сюда не попадают);

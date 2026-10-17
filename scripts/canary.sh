@@ -14,7 +14,7 @@
 # Each step installs release sensor-canary (track=canary, canary.enabled=true,
 # canary.weight=W). Analysis then requires both gates:
 #   1. scripts/smoke.sh with X_CANARY=always
-#   2. Prometheus: wait up to 180 s for the canary target, send 10 requests with
+#   2. Prometheus: wait up to 300 s for the canary target, send 10 requests with
 #      "X-Canary: always" through ingress-nginx, wait ANALYSIS_WAIT_S, then:
 #        min(up{namespace="sensor",service="sensor-canary-api"}) == 1
 #        canary request rate from nginx_ingress_controller_requests
@@ -294,11 +294,11 @@ metric_gate() {
   fi
 
   # Новый ServiceMonitor canary Prometheus подхватывает не сразу (operator + reload):
-  # ждём появления target до 180 с, иначе это откат.
+  # ждём появления target до 300 с, иначе это откат.
   local t0=$SECONDS
   until prom_sample "$q_up" >/dev/null 2>&1; do
-    if (( SECONDS - t0 > 180 )); then
-      rollback_canary "prometheus has no target sensor-canary-api after 180s at weight ${weight}"
+    if (( SECONDS - t0 > 300 )); then
+      rollback_canary "prometheus has no target sensor-canary-api after 300s at weight ${weight}"
     fi
     sleep 5
   done
