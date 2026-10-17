@@ -7,14 +7,14 @@ metadata:
     {{- include "sensor-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
 spec:
-  replicas: {{ .Values.api.replicas }}
+  replicas: {{ include "sensor-gateway.componentReplicas" (dict "root" . "component" "api") }}
   revisionHistoryLimit: 3
   selector:
     matchLabels:
       {{- include "sensor-gateway.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: api
-  # Старый под не снимаем, пока новый не Ready: иначе на единственной реплике
-  # запросу некуда идти.
+  # Старый под не снимаем, пока новый не Ready: иначе на время замены
+  # запросу некуда идти. У canary реплика одна, у stable их две.
   strategy:
     type: RollingUpdate
     rollingUpdate:

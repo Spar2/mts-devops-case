@@ -14,6 +14,7 @@ spec:
       app.kubernetes.io/component: api
   policyTypes:
     - Ingress
+    - Egress
   ingress:
     - from:
         - podSelector:
@@ -29,6 +30,9 @@ spec:
       ports:
         - protocol: TCP
           port: 8000
+  # services/api не открывает исходящих соединений: нет клиента HTTP,
+  # обращения к DNS и к API Kubernetes (токен ServiceAccount не монтируется).
+  egress: []
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -45,6 +49,7 @@ spec:
       app.kubernetes.io/component: web
   policyTypes:
     - Ingress
+    - Egress
   ingress:
     - from:
         - namespaceSelector:
@@ -53,4 +58,23 @@ spec:
       ports:
         - protocol: TCP
           port: 80
+  egress:
+    # nginx резолвит Service API при старте. CoreDNS в k3s — поды kube-system, порт 53.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "sensor-gateway.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: api
+      ports:
+        - protocol: TCP
+          port: 8000
 {{- end }}

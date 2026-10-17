@@ -41,7 +41,8 @@ serviceMonitor:
   interval: 30s
 
 api:
-  replicas: 1
+  # Ignored when track=canary (the template pins 1 replica).
+  replicas: 2
   resources:
     requests:
       cpu: 50m
@@ -51,7 +52,8 @@ api:
       memory: 256Mi
 
 web:
-  replicas: 1
+  # Ignored when track=canary (the template pins 1 replica).
+  replicas: 2
   resources:
     requests:
       cpu: 25m
@@ -60,12 +62,27 @@ web:
       cpu: 200m
       memory: 128Mi
 
-# API :8000 from this release's web pods and from namespace monitoring.
-# Web :80 from namespace ingress-nginx.
+# Ingress: API :8000 from this release's web pods and from namespace monitoring;
+# web :80 from namespace ingress-nginx.
+# Egress: web to kube-system DNS :53 and to this release's API :8000.
+# API has no egress rules: services/api does not dial out.
+# track=canary keeps these policies (one replica, but the same paths).
 networkPolicy:
   enabled: true
 
-# maxUnavailable 1: with replicas 1, minAvailable 1 would block drains.
+# Stable only. minAvailable 1 with 2 replicas allows one eviction.
+# track=canary does not render PDB (a single replica plus minAvailable 1
+# blocks drains, and uninstall would wait on it).
 pdb:
   enabled: true
-  maxUnavailable: 1
+  minAvailable: 1
+
+# Stable only. CPU HPA, autoscaling/v2. Requests are on the containers.
+# helm --wait does not wait for the HPA: a missing metrics-server leaves
+# the Deployment at api.replicas / web.replicas. k3s ships metrics-server.
+# track=canary does not render HPA.
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
