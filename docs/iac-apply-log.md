@@ -1,6 +1,6 @@
 # Прогон terraform apply (libvirt на box, 2026-10-17)
 
-Этот лог снят со старой схемой user-data: переменная `github_token` и файл `/root/.config/mts/github-token`. В текущем коде `github_token` удалён. Клон без секрета по HTTPS либо по SSH, если задан `github_deploy_key_path`. Новая схема на ВМ не применялась (`apply` не повторяли). Ниже — как проходил тот прогон, без переписывания фактов.
+Этот лог снят со старой схемой user-data: переменная `github_token` и файл `/root/.config/mts/github-token`. В текущем коде `github_token` удалён. Клон этого репозитория — HTTPS без секрета. SSH и `github_deploy_key_path` остаются для форка или приватной копии. Новая схема на ВМ не применялась (`apply` не повторяли). Ниже — как проходил тот прогон, без переписывания фактов.
 
 Хост: Debian 13 в контейнере без systemd (`tini` как pid 1), `/dev/kvm`, вложенный KVM (`/sys/module/kvm_intel/parameters/nested=Y`), `sudo` без пароля. Рядом оператор поднимает k3d. Контейнеры `k3d-*`, сеть docker и правила iptables docker/k3d не менялись. Команды `docker stop` / `docker rm` не выполнялись.
 

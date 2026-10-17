@@ -8,7 +8,7 @@
 
 Что есть на самом деле:
 
-- **CI (GitHub Actions, `ci.yml`).** На каждый push и pull request: линт, тесты, проверки манифестов, IaC (Terraform, Ansible, cloud-init, Trivy config), сборка, Trivy образов. На уровне workflow `permissions: contents: read`. Job `images` (pull request и push не в `main`) собирает и сканирует, без push и без `packages: write`. Job `images-publish` (только push в `main`) поднимает `packages: write`, пушит образы в приватный GHCR и кладёт SBOM. Concurrency `ci-${{ github.ref }}`: push в одну ветку ждёт в очереди без отмены, чтобы прогоны не перетирали `:latest` не по порядку; pull request отменяет предыдущий прогон. Все `uses:` закреплены по SHA коммита. Локально: `make lint` и `make test` — jobs `lint`, `api`, `web`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff` из job `llm`. Не входят job `images`, `images-publish` и job `iac` (раздел «CI локально»).
+- **CI (GitHub Actions, `ci.yml`).** На каждый push и pull request: линт, тесты, проверки манифестов, IaC (Terraform, Ansible, cloud-init, Trivy config), сборка, Trivy образов. На уровне workflow `permissions: contents: read`. Job `images` (pull request и push не в `main`) собирает и сканирует, без push и без `packages: write`. Job `images-publish` (только push в `main`) поднимает `packages: write`, пушит образы в GHCR (`ghcr.io/spar2/mts-devops-case`) и кладёт SBOM. Видимость пакетов здесь не зафиксирована. Concurrency `ci-${{ github.ref }}`: push в одну ветку ждёт в очереди без отмены, чтобы прогоны не перетирали `:latest` не по порядку; pull request отменяет предыдущий прогон. Все `uses:` закреплены по SHA коммита. Локально: `make lint` и `make test` — jobs `lint`, `api`, `web`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff` из job `llm`. Не входят job `images`, `images-publish` и job `iac` (раздел «CI локально»).
 - **CD.** Выкладка в кластер идёт командами `make up`, `make k8s-deploy` и `make k8s-canary`: Helm `--atomic`, smoke, canary через ingress-nginx с PromQL-гейтом и автооткатом. По умолчанию образы собираются локально из того же коммита.
 - **e2e в Actions (`e2e.yml`).** На pull request в `main` (кроме правок только `*.md`/`docs/`) прогоняется только k3d. На push в `main` с тем же фильтром и вручную через `workflow_dispatch` — оба варианта, k3d и нативный k3s. Устаревший прогон того же PR отменяется; прогон `main` не прерывается (группа `e2e-${{ github.ref }}`). Секретов workflow нет, `permissions: contents: read`, образы собираются на раннере. `make status` при `CI=true` пароли не печатает. Шаг после `make up` и шаг после ротации читают Secret и регистрируют `::add-mask::`.
 - **Без CD-деплоя из Actions.** Отдельного деплоя в постоянный кластер из Actions нет: у проекта нет постоянного кластера, доступного GitHub.
@@ -146,8 +146,6 @@ sudo apt-get update && sudo apt-get install -y git make curl openssl python3 doc
 (только чтобы положить pinned helm/kubectl/k3d в `/usr/local/bin` и при необходимости дописать `/etc/hosts`).
 Ресурсы: 8 ГБ RAM, 2–4 vCPU, ~10 ГБ диска. Порт `8081` на хосте должен быть свободен.
 
-Репозиторий приватный: жюри клонирует его под GitHub-аккаунтом, которому выдан доступ (HTTPS с токеном или SSH-ключ).
-
 ```bash
 git clone https://github.com/Spar2/mts-devops-case.git
 cd mts-devops-case
@@ -160,7 +158,7 @@ make up
    (sha256 архива или бинаря), создаёт k3d-кластер `CLUSTER` (по умолчанию `mts`, k3s v1.31.4 в Docker), ставит ingress-nginx 4.11.3 и ждёт готовности его admission webhook.
    Если кластер с этим именем уже есть, скрипт его не удаляет и не пересоздаёт: в stderr предупреждение, что образ, проброс порта и `K3D_EXTRA_ARGS` этого запуска не применяются;
 2. `scripts/secrets-init.sh` + `secrets-apply.sh` — ставит sops/age, генерирует ключ age этой машины и два зашифрованных Secret: `sensor-secrets` (пароль входа, ключ сессий) и `grafana-admin`;
-3. сборка образов из исходников и `k3d image import` (до мониторинга — ниже пик RAM) — **доступ к приватному GHCR не нужен**;
+3. сборка образов из исходников и `k3d image import` (до мониторинга — ниже пик RAM) — образы собираются локально, pull из GHCR не нужен;
 4. `scripts/monitoring-install.sh` — kube-prometheus-stack 65.1.1, дашборд, правила алертов, приёмник алертов `alert-sink`;
 5. `scripts/deploy.sh` — Helm-релиз `sensor` (`--atomic`) и smoke-проверка; при провале — `helm rollback`, а если ревизия одна или её нет — `helm uninstall`. Ошибка history не обрывает скрипт до этой команды; ошибка самого rollback/uninstall даёт код 1 и строку `error:`;
 6. `make status` — печатает адреса. Пароль в вывод не входит: рядом команда `kubectl`, само значение — только `SHOW_SECRETS=1 make status`. При `CI=true` значение не печатается и эта переменная его не включает.
@@ -190,10 +188,9 @@ make down                # demo-down, если есть .env; K3D=1: ещё k3d 
 - `make up K3D=0` — нативный k3s на хосте (ВМ, OpenStack-инстанс), ingress на `:80`. Проверено в GitHub Actions на Ubuntu 24.04.
 - `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` — плейбук-обёртка над `make k8s-up`
   (локальный, `connection: local`; логика не дублируется).
-- ВМ: `infra/README.md` — Terraform (libvirt) + cloud-init + netplan. По умолчанию внутри ВМ выполняется `make up K3D=0` (`run_make_up=true`). Клон на ВМ без GitHub-токена (публичный HTTPS) либо по deploy-key (`github_deploy_key_path`). Живой прогон на box — старая схема с `github_token` и `run_make_up=false`, лог `docs/iac-apply-log.md`. Повторный apply после удаления токена не делался.
-- Образы из GHCR (их пушит CI из `main`): пакеты приватные, как и репозиторий. `GHCR_USER=… GHCR_TOKEN=<PAT read:packages> make ghcr-secret`
-  создаёт pull-secret `ghcr`, затем `make k8s-deploy-ghcr TAG=<sha>`. Создание секрета и шаблон чарта проверены, вытягивание из
-  приватного GHCR в кластере — нет. Путь по умолчанию (локальная сборка) от GHCR не зависит.
+- ВМ: `infra/README.md` — Terraform (libvirt) + cloud-init + netplan. По умолчанию внутри ВМ выполняется `make up K3D=0` (`run_make_up=true`). Клон на ВМ — публичный HTTPS без токена. Для форка или приватной копии — deploy-key (`github_deploy_key_path`) и SSH `repo_url`. Живой прогон на box — старая схема с `github_token` и `run_make_up=false`, лог `docs/iac-apply-log.md`. Повторный apply после удаления токена не делался.
+- Образы по умолчанию собираются локально (`make k8s-images`) и импортируются в кластер. От GHCR этот путь не зависит.
+  CI из `main` пушит `ghcr.io/spar2/mts-devops-case/*`. Видимость пакетов здесь не зафиксирована. `make ghcr-secret` опционален и нужен только если пакеты недоступны анонимно: `GHCR_USER=… GHCR_TOKEN=<PAT read:packages> make ghcr-secret`, затем `make k8s-deploy-ghcr TAG=<sha>`. Для локальной сборки (`make up`) секрет не нужен. Создание секрета и шаблон чарта проверены; вытягивание образа из GHCR в кластер — нет.
 
 ### CI локально
 
@@ -249,7 +246,7 @@ make test
   `K3D_PRELOAD=1` (из подов нет egress), `INGRESS_SERVICE_TYPE=NodePort` (не работает hostPort) и host-gw вместо vxlan —
   на обычной Ubuntu они не нужны. В песочнице нет и ipset, поэтому контроллер NetworkPolicy k3s там не стартует
   и `make k8s-netpol-check` честно падает; на GitHub-раннере (обычный kernel) проверка проходит.
-- **ВМ libvirt.** Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально на схеме с `github_token`: Terraform 1.9.8, провайдер 0.8.3 из lock-файла, `fmt -check`, `init -backend=false`, `validate` (без демона libvirt), `cloud-init schema` для `user-data.example.yaml` и `network-config.yaml`. `user-data.yaml.tftpl` схема не принимает: директивы `templatefile` ломают YAML. Живой `terraform apply` на box 2026-10-17 доведён при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false` и `TF_VAR_github_token` (лог `docs/iac-apply-log.md`): загрузка, cloud-init `status: done`, netplan, клон, `vm_ip` совпал с DHCP, затем `terraform destroy`. Переменной `github_token` в коде больше нет: клон без токена или через `github_deploy_key_path`. Этот вариант `apply` не проходил. `terraform fmt -check` и `validate` новой схемы — успех (Terraform 1.9.8, в том числе образ `hashicorp/terraform:1.9.8`). `terraform plan` без apply не дошёл до плана: нет `/var/run/libvirt/libvirt-sock`. Не запускались значения по умолчанию (8 ГиБ / 4 vCPU, `run_make_up=true`) и `make up K3D=0` внутри этой ВМ; нативный `make up K3D=0` по-прежнему только e2e. До успешного прогона экземпляр box пересоздали (оператор связывает это с нехваткой памяти). Повторный apply после возврата k3d не делался.
+- **ВМ libvirt.** Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально на схеме с `github_token`: Terraform 1.9.8, провайдер 0.8.3 из lock-файла, `fmt -check`, `init -backend=false`, `validate` (без демона libvirt), `cloud-init schema` для `user-data.example.yaml` и `network-config.yaml`. `user-data.yaml.tftpl` схема не принимает: директивы `templatefile` ломают YAML. Живой `terraform apply` на box 2026-10-17 доведён при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false` и `TF_VAR_github_token` (лог `docs/iac-apply-log.md`): загрузка, cloud-init `status: done`, netplan, клон, `vm_ip` совпал с DHCP, затем `terraform destroy`. Переменной `github_token` в коде больше нет: клон по HTTPS без токена; для форка или приватной копии — `github_deploy_key_path`. Этот вариант `apply` не проходил. `terraform fmt -check` и `validate` новой схемы — успех (Terraform 1.9.8, в том числе образ `hashicorp/terraform:1.9.8`). `terraform plan` без apply не дошёл до плана: нет `/var/run/libvirt/libvirt-sock`. Не запускались значения по умолчанию (8 ГиБ / 4 vCPU, `run_make_up=true`) и `make up K3D=0` внутри этой ВМ; нативный `make up K3D=0` по-прежнему только e2e. До успешного прогона экземпляр box пересоздали (оператор связывает это с нехваткой памяти). Повторный apply после возврата k3d не делался.
 - Доставка алертов: webhook в кластерный `alert-sink` (пишет тело в лог). Почта и мессенджеры не настраивались.
 - Видео: не записано в репозитории, его снимает команда (требования выше).
 - `rollout status` возвращается, когда новые поды Ready, а старые ещё ~5 с отвечают в `preStop` со старым секретом. Поэтому `secrets-rotate.sh` и `secrets-apply.sh` после него ждут, пока старые поды API исчезнут: только после этого старый пароль гарантированно даёт 401.
@@ -303,10 +300,9 @@ make test
 - NetworkPolicy: к API (порт 8000) пускают только web своего релиза и поды Prometheus (`app.kubernetes.io/name: prometheus` в namespace monitoring), к web (порт 80) — только
   namespace ingress-nginx. Проверка — `make k8s-netpol-check` в e2e: из чужого namespace API и web недоступны, web через ingress-nginx отвечает 200, web своего релиза достаёт API. PDB `maxUnavailable: 1` для api и web.
 - kubeconfig нативного k3s: `/etc/rancher/k3s/k3s.yaml` с правами 600, копия пользователю в `~/.kube/config` (600).
-- Supply chain: Trivy до push; SBOM (SPDX JSON, `anchore/sbom-action`, SHA в таблице инструментов) обоих образов — артефакт job `images-publish` на `main`. Подпись cosign keyless
-  сознательно не используется: запись в публичный Rekor раскрыла бы имя приватного репозитория.
-- Cloud-init не получает GitHub-токен. По умолчанию ВМ клонирует репозиторий по HTTPS без учётных данных.
-  Для приватного репозитория — `github_deploy_key_path` (абсолютный путь к приватному ключу на хосте Terraform) и SSH `repo_url`.
+- Supply chain: Trivy до push; SBOM (SPDX JSON, `anchore/sbom-action`, SHA в таблице инструментов) обоих образов — артефакт job `images-publish` на `main`. Подписи образов нет. Шаг cosign в workflow не добавлен: job публикует уже собранный образ через `docker push` после `load: true` у build-push-action, а digest этого шага — digest конфига, не digest манифеста в реестре. Локально на buildx 0.13.1 (`docker buildx build --load --metadata-file`, затем `docker push` в `registry:2`) `containerimage.digest` совпал с digest конфига и не совпал с digest тега. Подпись по digest шага сборки указывала бы не на манифест в GHCR. Прогона cosign на GitHub не было.
+- Cloud-init не получает GitHub-токен. По умолчанию ВМ клонирует этот репозиторий по HTTPS без учётных данных.
+  Для форка или приватной копии — `github_deploy_key_path` (абсолютный путь к приватному ключу на хосте Terraform) и SSH `repo_url`.
   `runcmd` удаляет файл ключа с ВМ после clone (`/root/.config/mts/github-deploy-key.b64` и `/home/ubuntu/.ssh/github-deploy-key`).
   Если ключ передавали, его байты всё равно попадают в ISO cloud-init, в копию user-data на диске гостя (`/var/lib/cloud/instance/`) и в state Terraform (`*.tfstate` в `.gitignore`). Живой apply 2026-10-17 ещё использовал `github_token`; новая схема на ВМ не проверялась.
 

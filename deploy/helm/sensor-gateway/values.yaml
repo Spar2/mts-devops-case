@@ -13,7 +13,8 @@ image:
     repository: ghcr.io/spar2/mts-devops-case/sensor-web
     tag: latest
 
-# Optional list of {name: pull-secret} when GHCR is private.
+# Optional list of {name: pull-secret}. The default path builds images locally.
+# Set a secret when GHCR packages are not anonymously pullable (make ghcr-secret).
 imagePullSecrets: []
 
 # Existing Secret key DEMO_PASSWORD. The chart does not create the Secret.

@@ -50,7 +50,7 @@ install -m 0755 "$tmp/terraform" ~/.local/bin/terraform
 
 ## Запуск
 
-Переменной `github_token` нет. cloud-init клонирует `repo_url` без токена. Значение по умолчанию — публичный HTTPS. Приватный репозиторий — отдельный deploy-key и SSH URL, не PAT.
+Переменной `github_token` нет. cloud-init клонирует `repo_url` без токена. Значение по умолчанию — публичный HTTPS этого репозитория. Форк или приватная копия — отдельный deploy-key и SSH URL, не PAT.
 
 ```bash
 cd infra/terraform
@@ -60,7 +60,7 @@ terraform apply \
 terraform output vm_ip
 ```
 
-Приватный репозиторий (ключ только на хосте, в git не класть):
+Форк или приватная копия (ключ только на хосте, в git не класть):
 
 ```bash
 terraform apply \
@@ -74,7 +74,7 @@ terraform apply \
 | Переменная | По умолчанию | Смысл |
 | --- | --- | --- |
 | `repo_url` | `https://github.com/Spar2/mts-devops-case.git` | Что клонировать. С deploy-key — SSH URL |
-| `github_deploy_key_path` | пустая строка, `sensitive` | Абсолютный путь на хосте Terraform к приватному deploy-key. Пустая строка — HTTPS без секрета |
+| `github_deploy_key_path` | пустая строка, `sensitive` | Абсолютный путь на хосте Terraform к приватному ключу deploy-key. Для форка или приватной копии. Пустая строка — HTTPS без секрета |
 | `ssh_public_key` | пустая строка | Ключ в `~ubuntu/.ssh/authorized_keys`. Пустая строка — ключ не добавляется |
 | `libvirt_uri` | `qemu:///system` | Куда подключается провайдер |
 | `vm_vcpu` | `4` | Число vCPU |
