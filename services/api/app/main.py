@@ -5,6 +5,7 @@ import hmac
 import json
 import math
 import os
+import re
 import secrets
 import time
 from collections import defaultdict, deque
@@ -17,6 +18,10 @@ _LOGIN_LIMIT = 30
 _LOGIN_WINDOW_S = 60.0
 _PROBE_SLEEP_S = 0.01
 _B64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+# Image tag, same token deploy.sh and canary.sh accept. Anything else falls back
+# so a bad env value cannot break the header.
+_APP_VERSION_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
+_APP_VERSION_DEFAULT = "0.1.0"
 
 
 class LoginBody(BaseModel):
@@ -60,6 +65,13 @@ class _Session:
 
 def _equals(left: str, right: str) -> bool:
     return secrets.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
+
+
+def _app_version() -> str:
+    raw = os.environ.get("APP_VERSION", "").strip()
+    if _APP_VERSION_RE.fullmatch(raw):
+        return raw
+    return _APP_VERSION_DEFAULT
 
 
 def _unauthorized() -> HTTPException:
@@ -248,8 +260,13 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/ready")
-    async def ready() -> dict[str, str]:
-        return {"status": "ok"}
+    async def ready() -> JSONResponse:
+        # APP_VERSION is the image tag (chart env). Smoke and the canary weight
+        # sample use it to tell this pod from the other release.
+        version = _app_version()
+        response = JSONResponse({"status": "ok", "version": version})
+        response.headers["X-App-Version"] = version
+        return response
 
     @app.get("/metrics")
     async def metrics(request: Request) -> PlainTextResponse:
