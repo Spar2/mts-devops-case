@@ -59,20 +59,57 @@ if ((${#extra[@]} > 0)); then
 fi
 "${helm_cmd[@]}"
 
+# Число ревизий релиза sensor. Пустой вывод, битый JSON, не-список и ошибка helm
+# считаются нулём: set -e не должен оборвать скрипт до uninstall/rollback.
+revision_count() {
+  local raw count
+  raw="$(helm history sensor -n sensor -o json 2>/dev/null || true)"
+  count="$(
+    printf '%s' "${raw}" | python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+if not raw:
+    print(0)
+    raise SystemExit(0)
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    print(0)
+    raise SystemExit(0)
+print(len(data) if isinstance(data, list) else 0)
+' 2>/dev/null || true
+  )"
+  if [[ ! "${count}" =~ ^[0-9]+$ ]]; then
+    count=0
+  fi
+  printf '%s\n' "${count}"
+}
+
+rollback_or_uninstall() {
+  local revs
+  revs="$(revision_count)"
+  if [[ "${revs}" -le 1 ]]; then
+    # Нет ревизий или одна: предыдущей ревизии нет, удаляем релиз.
+    printf 'smoke failed on first install (%s revision(s)); helm uninstall sensor -n sensor\n' "${revs}" >&2
+    if ! helm uninstall sensor -n sensor --wait; then
+      printf 'error: helm uninstall sensor -n sensor --wait failed\n' >&2
+      exit 1
+    fi
+  else
+    printf 'smoke failed (%s revisions); helm rollback sensor 0 -n sensor --wait\n' "${revs}" >&2
+    # Ревизия 0 = предыдущая.
+    if ! helm rollback sensor 0 -n sensor --wait; then
+      printf 'error: helm rollback sensor 0 -n sensor --wait failed\n' >&2
+      exit 1
+    fi
+  fi
+}
+
 # Stable smoke must not inherit a canary pin from the caller.
 # "X-Canary: never" pins the stable smoke to stable pods while a canary ingress exists,
 # so the release under test is really the stable one.
 if ! X_CANARY=never "${ROOT}/scripts/smoke.sh"; then
-  revs="$(helm history sensor -n sensor -o json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
-  if [[ "${revs}" -le 1 ]]; then
-    # Первая установка: откатываться некуда, удаляем релиз целиком.
-    printf 'smoke failed on first install; helm uninstall sensor -n sensor\n' >&2
-    helm uninstall sensor -n sensor --wait || true
-  else
-    printf 'smoke failed; helm rollback sensor 0 -n sensor --wait\n' >&2
-    # Ревизия 0 = предыдущая.
-    helm rollback sensor 0 -n sensor --wait || true
-  fi
+  rollback_or_uninstall
   exit 1
 fi
 
