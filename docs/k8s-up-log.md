@@ -52,3 +52,10 @@ user	0m6.076s
 sys	0m1.324s
 MAKE_EXIT 0
 ```
+
+## Повторная проверка свежим клоном (коммит 2a83762, 17.10.2026 ~03:15 MSK)
+
+`git clone` в чистый каталог, ключ age удалён, кластера нет → `make k8s-up K3D=1` (те же параметры песочницы):
+`PASS deploy sensor 2a83762`, `real 2m37s`, Grafana через ingress — 200. На том же стенде:
+`scripts/canary-fail-demo.sh` → `ROLLBACK canary: smoke failed at weight 10`, stable отвечает;
+`scripts/rollback-demo.sh` → `UPGRADE FAILED … rolled back due to atomic`, `helm history`: `Rollback to 1`.
