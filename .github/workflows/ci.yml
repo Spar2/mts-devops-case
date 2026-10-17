@@ -7,12 +7,19 @@ on:
 permissions:
   contents: read
 
+# Push в main публикует тег :latest. Прогоны одного ref идут очередью, без отмены,
+# чтобы более ранний коммит не перезаписал тег после более позднего.
+# Pull request: новый пуш в ту же голову отменяет незавершённый прогон.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: python -m pip install ruff==0.8.4
@@ -21,8 +28,8 @@ jobs:
   api:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: python -m pip install -r services/api/requirements.txt
@@ -34,8 +41,8 @@ jobs:
   web:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
           cache: npm
@@ -43,7 +50,68 @@ jobs:
       - run: npm ci && npm run build
         working-directory: apps/web
 
+  # Сборка и Trivy без push. packages: write нет: на pull request публиковать нечего.
+  # Push не в main сюда же попадает и тоже не публикует. Взаимоисключающе с images-publish.
   images:
+    if: github.event_name != 'push' || github.ref != 'refs/heads/main'
+    needs: [lint, api, web, helm, manifests, dockerfiles, shellcheck, iac]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      # GHCR repository names must be lowercase.
+      API_IMAGE: ghcr.io/spar2/mts-devops-case/sensor-gateway
+      WEB_IMAGE: ghcr.io/spar2/mts-devops-case/sensor-web
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Image tag
+        id: tag
+        run: echo "sha=$(git rev-parse --short=7 HEAD | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build sensor-gateway
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: services/api
+          load: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ steps.tag.outputs.sha }}
+            ${{ env.API_IMAGE }}:latest
+
+      - name: Build sensor-web
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: apps/web
+          load: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:${{ steps.tag.outputs.sha }}
+            ${{ env.WEB_IMAGE }}:latest
+
+      - name: Scan sensor-gateway
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.API_IMAGE }}:${{ steps.tag.outputs.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          version: v0.70.0
+
+      - name: Scan sensor-web
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.WEB_IMAGE }}:${{ steps.tag.outputs.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          version: v0.70.0
+
+  # Только push в main. packages: write есть только здесь: право задаётся на весь job,
+  # шаг с if его не отзывает. Образ с раннера job images не забрать, поэтому сборка повторяется.
+  # На main job images не запускается.
+  images-publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [lint, api, web, helm, manifests, dockerfiles, shellcheck, iac]
     runs-on: ubuntu-24.04
     permissions:
@@ -54,16 +122,16 @@ jobs:
       API_IMAGE: ghcr.io/spar2/mts-devops-case/sensor-gateway
       WEB_IMAGE: ghcr.io/spar2/mts-devops-case/sensor-web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Image tag
         id: tag
         run: echo "sha=$(git rev-parse --short=7 HEAD | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build sensor-gateway
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: services/api
           load: true
@@ -72,7 +140,7 @@ jobs:
             ${{ env.API_IMAGE }}:latest
 
       - name: Build sensor-web
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: apps/web
           load: true
@@ -81,7 +149,7 @@ jobs:
             ${{ env.WEB_IMAGE }}:latest
 
       - name: Scan sensor-gateway
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.API_IMAGE }}:${{ steps.tag.outputs.sha }}
           severity: HIGH,CRITICAL
@@ -90,7 +158,7 @@ jobs:
           version: v0.70.0
 
       - name: Scan sensor-web
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.WEB_IMAGE }}:${{ steps.tag.outputs.sha }}
           severity: HIGH,CRITICAL
@@ -99,15 +167,13 @@ jobs:
           version: v0.70.0
 
       - name: Log in to GHCR
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push images
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
           SHA: ${{ steps.tag.outputs.sha }}
         run: |
@@ -117,8 +183,7 @@ jobs:
           docker push "${WEB_IMAGE}:latest"
 
       - name: SBOM (SPDX) for images
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        uses: anchore/sbom-action@v0.17.8
+        uses: anchore/sbom-action@55dc4ee22412511ee8c3142cbea40418e6cec693 # v0.17.8
         with:
           image: ${{ env.API_IMAGE }}:${{ steps.tag.outputs.sha }}
           format: spdx-json
@@ -126,8 +191,7 @@ jobs:
           upload-artifact: true
 
       - name: SBOM (SPDX) for web image
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        uses: anchore/sbom-action@v0.17.8
+        uses: anchore/sbom-action@55dc4ee22412511ee8c3142cbea40418e6cec693 # v0.17.8
         with:
           image: ${{ env.WEB_IMAGE }}:${{ steps.tag.outputs.sha }}
           format: spdx-json
@@ -139,10 +203,10 @@ jobs:
     # Провайдер libvirt 0.8.3 отдаёт схему без демона libvirt (проверено init/validate).
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # wrapper перехватывает код возврата: fmt -check и validate тогда не роняют шаг.
-      - uses: hashicorp/setup-terraform@v4.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
@@ -153,7 +217,7 @@ jobs:
           terraform -chdir=infra/terraform init -backend=false -input=false
           terraform -chdir=infra/terraform validate
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -176,7 +240,7 @@ jobs:
       # По умолчанию Trivy рендерит чарт как Kubernetes 1.20, а kubeVersion чарта — >=1.28:
       # без версии рендер падает и сканер не видит манифесты.
       - name: Trivy config (Helm)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_HELM_KUBE_VERSION: "1.31.0"
           TRIVY_HELM_API_VERSIONS: "monitoring.coreos.com/v1,monitoring.coreos.com/v1/ServiceMonitor"
@@ -188,7 +252,7 @@ jobs:
           version: v0.70.0
 
       - name: Trivy config (API Dockerfile)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
           scan-ref: services/api/Dockerfile
@@ -197,7 +261,7 @@ jobs:
           version: v0.70.0
 
       - name: Trivy config (web Dockerfile)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
           scan-ref: apps/web/Dockerfile
@@ -207,7 +271,7 @@ jobs:
           version: v0.70.0
 
       - name: Trivy config (Terraform)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
           scan-ref: infra/terraform
@@ -218,11 +282,11 @@ jobs:
   helm:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Helm
         if: ${{ hashFiles('deploy/helm/sensor-gateway/**', 'deploy/helm/sensor-gateway/*') != '' }}
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.16.3
 
@@ -235,11 +299,11 @@ jobs:
   manifests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # v3.16.3 — то же значение, что HELM_VERSION в scripts/lint-manifests.sh.
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
           version: v3.16.3
 
@@ -249,16 +313,16 @@ jobs:
   dockerfiles:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Lint API Dockerfile
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: services/api/Dockerfile
           failure-threshold: error
 
       - name: Lint web Dockerfile
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: apps/web/Dockerfile
           failure-threshold: error
@@ -266,7 +330,7 @@ jobs:
   shellcheck:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # shellcheck 0.10.0: бинарь из PATH или образ koalaman/shellcheck:v0.10.0 (Makefile, lint-shellcheck).
       - name: Shellcheck
         run: make lint-shellcheck
@@ -275,8 +339,8 @@ jobs:
     # Валидатор LLM-вывода и цикл исправления без модели (фейковый OpenAI-сервер) + promtool на эталонном правиле.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - run: python -m pip install pyyaml==6.0.2 pytest==8.3.4 ruff==0.8.4
