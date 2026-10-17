@@ -329,8 +329,17 @@ load_finite_sample() {
   local query=$1
   local weight=$2
   local empty_ok=${3:-0}
+  local waited=0
   sample_rc=0
   sample_value="$(prom_sample "$query")" || sample_rc=$?
+  # Пустой вектор сразу после make up: Prometheus ещё не снял первый scrape
+  # ingress-nginx. Ждём до PROM_EMPTY_WAIT_S (60 с), потом откат. NaN/Inf не ждём.
+  while [[ "$sample_rc" -eq 1 && "$empty_ok" -ne 1 && "$waited" -lt "${PROM_EMPTY_WAIT_S:-60}" ]]; do
+    sleep 5
+    waited=$((waited + 5))
+    sample_rc=0
+    sample_value="$(prom_sample "$query")" || sample_rc=$?
+  done
   if [[ "$sample_rc" -eq 1 && "$empty_ok" -eq 1 ]]; then
     sample_value=0
     sample_rc=0
