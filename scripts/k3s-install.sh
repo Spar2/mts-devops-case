@@ -209,8 +209,8 @@ install_ingress_nginx() {
     # Preloaded images are imported by tag; digest-pinned refs would force a registry pull.
     digest_args=(--set controller.image.digest= --set controller.admissionWebhooks.patch.image.digest=)
   fi
-  # Chart 4.11.3 drops *-snippet annotations unless this is true. The sensor
-  # Ingress uses server-snippet to return 403 for /metrics.
+  # allowSnippetAnnotations stays at the chart default (false). Snippets
+  # weaken ingress-nginx (CVE-2021-25742). /metrics is closed by web nginx.
   helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
     "${digest_args[@]}" \
     --version "${INGRESS_NGINX_VERSION}" \
@@ -224,7 +224,6 @@ install_ingress_nginx() {
     --set controller.ingressClassResource.name=nginx \
     --set controller.ingressClass=nginx \
     --set controller.ingressClassResource.default=true \
-    --set controller.allowSnippetAnnotations=true \
     --wait \
     --timeout 10m
   wait_for_admission_webhook

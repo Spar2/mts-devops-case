@@ -12,7 +12,7 @@ Grafana: http://grafana.localtest.me:8081 в режиме k3d, :80 при `K3D=0
 
 ## Зачем эти метрики
 
-API пишет текст Prometheus на `GET /metrics` библиотекой `prometheus_client` 0.26.0. С ingress и с nginx web путь закрыт (403). ServiceMonitor скрейпит Service API напрямую.
+API пишет текст Prometheus на `GET /metrics` библиотекой `prometheus_client` 0.26.0. Снаружи путь закрывает nginx web (403). Ingress направляет запрос на Service web и сам путь не режет. ServiceMonitor скрейпит Service API напрямую.
 
 - `http_request_duration_seconds` — гистограмма задержки HTTP. Метки `method`, `path` (шаблон маршрута; несовпавший путь — `unmatched`), `status`.
 - `http_requests_total` — счётчик запросов с теми же метками, включая scrape `/metrics`. На дашборде `sum by (service) (rate(...[2m]))`.

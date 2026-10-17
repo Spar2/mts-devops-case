@@ -152,13 +152,13 @@ check_ready() {
 check_metrics() {
   local status deploy body
   status="$(curl_status "${BASE_URL}/metrics")"
-  # Ingress (and web nginx) must not publish /metrics. 404 is accepted if the
-  # path is simply not routed. The body is read from the API pod, which is
-  # what ServiceMonitor scrapes.
+  # The external URL reaches web nginx, which returns 403 for /metrics.
+  # 404 is accepted if the path is not routed. The body is read from the API
+  # pod, which is what ServiceMonitor scrapes.
   if [[ "$status" == "403" || "$status" == "404" ]]; then
-    pass "ingress /metrics HTTP ${status}"
+    pass "external /metrics HTTP ${status} (web nginx)"
   else
-    fail "ingress /metrics: HTTP ${status}, expected 403 or 404"
+    fail "external /metrics: HTTP ${status}, expected 403 or 404 from web nginx"
   fi
   if [[ "${X_CANARY:-}" == "always" ]]; then
     deploy="sensor-canary-api"

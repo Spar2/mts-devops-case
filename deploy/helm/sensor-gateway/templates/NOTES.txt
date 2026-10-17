@@ -9,5 +9,5 @@ DEMO_PASSWORD is read from Secret {{ .Values.existingSecret }}, key DEMO_PASSWOR
 API Service {{ .Release.Name }}-api port http:8000. Web Service {{ .Release.Name }}-web port http:80.
 {{- if .Values.serviceMonitor.enabled }}
 ServiceMonitor {{ .Release.Name }}-api (label release=mon, path /metrics) is applied when monitoring.coreos.com/v1/ServiceMonitor exists.
-Ingress returns 403 for /metrics. Prometheus scrapes the API Service, not the Ingress.
+Web nginx returns 403 for /metrics. Prometheus scrapes the API Service, not the Ingress.
 {{- end }}

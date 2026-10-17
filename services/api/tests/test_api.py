@@ -270,6 +270,40 @@ def test_trusted_proxy_prefers_x_real_ip_and_skips_trusted_forwarded_hops() -> N
     assert _wrong_login(proxy, other_real).status_code == 401
 
 
+def test_spoofed_forwarded_for_does_not_replace_client() -> None:
+    application = create_app()
+    outsider = TestClient(application, client=("203.0.113.60", 40000))
+    forged = {
+        "X-Real-IP": "198.51.100.1",
+        "X-Forwarded-For": "198.51.100.1, 203.0.113.61",
+    }
+    for _ in range(30):
+        assert _wrong_login(outsider, forged).status_code == 401
+    still_forged = {"X-Real-IP": "198.51.100.9", "X-Forwarded-For": "203.0.113.62"}
+    assert _wrong_login(outsider, still_forged).status_code == 429
+
+    proxy = TestClient(application, client=("10.42.0.11", 40000))
+    # Leftmost address is forged. The rightmost untrusted hop is the client.
+    chain = {"X-Forwarded-For": "198.51.100.8, 203.0.113.80, 10.42.0.4"}
+    for _ in range(30):
+        assert _wrong_login(proxy, chain).status_code == 401
+    same_client = {"X-Forwarded-For": "203.0.113.1, 203.0.113.80"}
+    assert _wrong_login(proxy, same_client).status_code == 429
+    assert _wrong_login(proxy, {"X-Forwarded-For": "198.51.100.8"}).status_code == 401
+
+    # From a trusted peer, X-Real-IP wins over a forged X-Forwarded-For chain.
+    attested = {
+        "X-Real-IP": "203.0.113.90",
+        "X-Forwarded-For": "198.51.100.90, 203.0.113.91",
+    }
+    for _ in range(30):
+        assert _wrong_login(proxy, attested).status_code == 401
+    same_real = {"X-Real-IP": "203.0.113.90", "X-Forwarded-For": "198.51.100.1"}
+    assert _wrong_login(proxy, same_real).status_code == 429
+    assert _wrong_login(proxy, {"X-Forwarded-For": "198.51.100.90"}).status_code == 401
+    assert _wrong_login(proxy, {"X-Real-IP": "203.0.113.91"}).status_code == 401
+
+
 def test_create_app_rejects_bad_trusted_proxy_cidr(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEMO_PASSWORD", "demo-password-ok")
     monkeypatch.setenv("TRUSTED_PROXY_CIDRS", "10.42.0.0/16,nope")

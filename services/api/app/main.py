@@ -159,6 +159,9 @@ def _client_from_forwarded(header: str, networks: tuple[_Network, ...]) -> str |
 
 
 def _client_address(request: Request, networks: tuple[_Network, ...]) -> str:
+    # Headers count only when the TCP peer is a trusted proxy. Then X-Real-IP
+    # is that proxy's client. Otherwise the rightmost untrusted X-Forwarded-For
+    # hop is the client. A forged header from an untrusted peer is ignored.
     peer = request.client.host if request.client and request.client.host else "unknown"
     peer_addr = _parse_ip(peer)
     if peer_addr is None or not _in_trusted(peer_addr, networks):

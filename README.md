@@ -29,7 +29,7 @@
 
 | Требование | Где лежит | Как проверить | Статус проверки |
 | --- | --- | --- | --- |
-| Запуск ≤ 3 командами | `Makefile` (`make up`) | `git clone … && cd mts-devops-case && make up` | Проверено: свежий клон e0fe907 на box без кластера, `make up` за 2 мин 0 с (smoke: вход, probe, 401 без cookie, `/metrics`); повторный `make k8s-up K3D=1` идемпотентен (1 мин 11 с). Тот прогон читал тело `/metrics` через ingress. Текущий `scripts/smoke.sh` ждёт с ingress 403 или 404 и читает `service_up` через `kubectl exec` в под API; этот вариант на кластере не перепрогонялся. Тот же путь `make up` — в e2e GitHub Actions: k3d на pull request в `main`, k3d и нативный k3s на push в `main` и по `workflow_dispatch` |
+| Запуск ≤ 3 командами | `Makefile` (`make up`) | `git clone … && cd mts-devops-case && make up` | Проверено: свежий клон e0fe907 на box без кластера, `make up` за 2 мин 0 с (smoke: вход, probe, 401 без cookie, `/metrics`); повторный `make k8s-up K3D=1` идемпотентен (1 мин 11 с). Тот прогон читал тело `/metrics` через ingress. Текущий `scripts/smoke.sh` ждёт снаружи 403 от nginx web или 404 и читает `service_up` через `kubectl exec` в под API; этот вариант на кластере не перепрогонялся. Тот же путь `make up` — в e2e GitHub Actions: k3d на pull request в `main`, k3d и нативный k3s на push в `main` и по `workflow_dispatch` |
 | IaC: кластер | `scripts/k3s-install.sh`, `infra/ansible/site.yml` | `make k8s-up` / `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` | k3d: свежий клон на box и e2e; нативный k3s (`make up K3D=0`): только e2e на `ubuntu-24.04`. Лог `docs/k8s-up-log.md`. Полный прогон плейбука в репозитории не залогирован; syntax-check — job `iac` (ansible-core 2.17.14) |
 | IaC: ВМ | `infra/cloud-init/`, `infra/terraform/` (libvirt, lock 0.8.3) | job `iac`: `terraform fmt -check`, `init -backend=false`, `validate`, `cloud-init schema`; живой `terraform apply` (`vm_memory_mib`, `vm_vcpu`, `run_make_up`) и `terraform destroy` | Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально (Terraform 1.9.8, cloud-init 26.1, схемы `Valid`). Живой apply на box 2026-10-17: 2048 МиБ / 2 vCPU, `run_make_up=false`, cloud-init `status: done`, клон и пакеты, `vm_ip` совпал с DHCP. `make up` в госте не запускался. Лог `docs/iac-apply-log.md` |
 | CI: линт, тесты, сборка | `.github/workflows/ci.yml` | вкладка Actions | Зелёный прогон на GitHub (jobs lint, api, web, helm, manifests, dockerfiles, shellcheck, llm, iac, images). Job `iac` зелёный на GitHub (pull request #3) и воспроизведён локально |
@@ -93,8 +93,8 @@ flowchart LR
 - Compose-режим (`make demo`): браузер → nginx `web` (127.0.0.1:8080) → `api:8000`. Nginx отдаёт интерфейс и
   проксирует `/api`, `/health`, `/ready`. На `/metrics` отвечает 403 и в API не ходит.
 - В Kubernetes nginx-конфиг web подменяется ConfigMap'ом чарта: каждый релиз проксирует в свой Service `<release>-api`
-  и пересылает `X-Real-IP` и `X-Forwarded-For`, которые выставил ingress-nginx. `/metrics` на web — тоже 403.
-  Ingress stable дополнительно закрывает `/metrics` аннотацией `server-snippet` (ответ 403): внешний запрос не доходит до web.
+  и передаёт API `X-Real-IP`, который выставил ingress-nginx. Клиентский `X-Forwarded-For` web в API не пересылает: его можно подделать.
+  На `/metrics` nginx web отвечает 403. Ingress ведёт только на Service web и этот путь отдельно не закрывает.
   Prometheus читает `/metrics` Service API через ServiceMonitor, минуя ingress.
 - Сессия — подписанная cookie `sensor_session` (HMAC-SHA256, `HttpOnly`, `SameSite=Strict`). Ключ выводится из
   `SESSION_SECRET` и `DEMO_PASSWORD`, поэтому stable и canary принимают одну cookie, а ротация пароля отзывает все сессии.
@@ -221,7 +221,7 @@ make test
 ### Как работает CD
 
 - `scripts/deploy.sh TAG` — `helm upgrade --install --atomic --wait --timeout 3m`; если поды не стали ready, Helm откатывает
-  релиз сам. Затем `scripts/smoke.sh` (`/ready`, снаружи `/metrics` 403 или 404, тело метрик через `kubectl exec` в под API, 401 без cookie, вход, `/api/v1/service`, probe); при провале
+  релиз сам. Затем `scripts/smoke.sh` (`/ready`, снаружи `/metrics` 403 от nginx web или 404, тело метрик через `kubectl exec` в под API, 401 без cookie, вход, `/api/v1/service`, probe); при провале
   `helm rollback sensor 0`, а если это была первая установка (откатываться некуда) — `helm uninstall sensor`.
 - `scripts/canary.sh TAG` — релиз `sensor-canary` с аннотациями ingress-nginx `canary`, `canary-weight`, `canary-by-header: X-Canary`.
   На каждом шаге: smoke через `X-Canary: always`, нагрузка через ingress, затем PromQL (`up` canary — если Prometheus успел обнаружить target за 120 с; основной гейт — метрики ingress-nginx):
@@ -254,7 +254,7 @@ make test
 ## Мониторинг и наблюдаемость
 
 - Сервис отдаёт `/health`, `/ready`, `/metrics`. Метрики пишет `prometheus_client` 0.26.0: гистограмма `http_request_duration_seconds` и счётчик `http_requests_total` с метками `method`, `path` (шаблон маршрута, для несовпавшего пути `unmatched`), `status`; `service_up` — 1, если проверка готовности проходит (ключ сессии подписывает и проверяет токен), иначе 0 и `/ready` отвечает 503; `service_probe_latency_seconds` — измеренное время последнего `POST /api/v1/service/probe` (синтетическое показание, без искусственной паузы). Реестр по умолчанию также отдаёт `process_*`, в том числе `process_resident_memory_bytes`.
-- Снаружи `/metrics` закрыт: ingress stable (`server-snippet`) и nginx web отвечают 403. ServiceMonitor (label `release: mon`) скрейпит Service API напрямую, stable и canary.
+- Снаружи `/metrics` закрыт: nginx web отвечает 403. Ingress направляет запрос на Service web и сам путь не режет. ServiceMonitor (label `release: mon`) скрейпит Service API напрямую, stable и canary.
 - Метрики ingress-nginx (`controller.metrics.enabled`, ServiceMonitor `deploy/monitoring/ingress-nginx-servicemonitor.yaml`): по ним считаются трафик и 5xx canary.
 - Дашборд Grafana `sensor-gateway` (`deploy/monitoring/dashboard-configmap.yaml`): число живых таргетов API, `up` по таргетам, req/s по сервисам, p95 `http_request_duration_seconds` (порог 0.5 с), доля 5xx через ingress-nginx.
 
@@ -283,12 +283,12 @@ make test
   Трекаемые файлы скрипты не меняют. Ротация пароля, ключа сессий и ключа age — `deploy/secrets/README.md`.
 - Сессия: подписанная cookie с истечением (12 ч), сравнение подписи за постоянное время; ротация пароля отзывает все сессии.
   Logout стирает cookie в браузере; сама подпись действительна до истечения или ротации — это осознанный компромисс stateless-сессий.
-- Вход: не больше 30 попыток в минуту на IP клиента (429). Счётчик в памяти процесса API. Если TCP-пир входит в
-  `TRUSTED_PROXY_CIDRS` (по умолчанию `10.42.0.0/16,10.43.0.0/16`, pod и service CIDR k3s; в чарте `env.trustedProxyCidrs`),
-  ключ — `X-Real-IP`, иначе правый адрес `X-Forwarded-For` вне этих сетей. Чужая сеть в заголовке от недоверенного пира
-  не учитывается. nginx web пересылает заголовки ingress-nginx. В Compose пир — контейнер web, он не в этих сетях,
+- Вход: не больше 30 попыток в минуту на IP клиента (429). Счётчик в памяти процесса API. Заголовки учитываются, только если TCP-пир входит в
+  `TRUSTED_PROXY_CIDRS` (по умолчанию `10.42.0.0/16,10.43.0.0/16`, pod и service CIDR k3s; в чарте `env.trustedProxyCidrs`).
+  Тогда ключ — `X-Real-IP`, а если его нет — самый правый адрес `X-Forwarded-For` вне этих сетей. От недоверенного пира берётся сам пир: подделанный `X-Forwarded-For` или `X-Real-IP` ключ не меняет.
+  nginx web передаёт API `X-Real-IP`, который выставил ingress-nginx, и не пересылает клиентский `X-Forwarded-For`. В Compose пир — контейнер web, он не в этих сетях,
   поэтому лимит там общий на контейнер, а не на браузер.
-- `/metrics` с ingress и с nginx web недоступен (403). Скрейп — ServiceMonitor на Service API, его пускает NetworkPolicy из namespace monitoring.
+- Снаружи `/metrics` закрывает nginx web (403). Ingress только направляет трафик на Service web. Скрейп — ServiceMonitor на Service API, его пускает NetworkPolicy из namespace monitoring.
 - CI: Trivy блокирует образ с исправимыми HIGH/CRITICAL; push в GHCR только из `main`; `GITHUB_TOKEN` с `contents: read`, `packages: write`.
 - CI, job `iac`: тот же Trivy v0.70.0 (`scan-type: config`, HIGH/CRITICAL) по чарту (рендер Kubernetes 1.31 и ServiceMonitor),
   обоим Dockerfile и `infra/terraform`. Чарт и Terraform без находок этого уровня. `apps/web/Dockerfile` — DS-0002 (нет `USER`):
@@ -405,7 +405,7 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; �
   (port-forward поднимает `scripts/prom-forward.sh`) или задать `PROM_URL`.
 - `make k8s-netpol-check` падает с `REACHED` из чужого namespace — в кластере не работает контроллер NetworkPolicy
   (например, нет модуля ipset в ядре).
-- Ingress не применяется: `snippet directives are disabled` — у ingress-nginx 4.11.3 `allowSnippetAnnotations` по умолчанию выключен, аннотация `server-snippet` отбрасывается или отклоняется. `scripts/k3s-install.sh` ставит `controller.allowSnippetAnnotations=true`; повторный запуск обновляет контроллер. Пока аннотации нет, nginx web всё равно отвечает 403 на `/metrics`.
+- Снаружи `/metrics` отвечает 403 — это nginx web. `controller.allowSnippetAnnotations` не включается: у ingress-nginx 4.11.3 сниппеты выключены по умолчанию (CVE-2021-25742). Ingress ведёт только на Service web.
 - Все клиенты получают 429 вместе — адрес web-пода не входит в `TRUSTED_PROXY_CIDRS` (другой cluster-cidr). Задать сети в `env.trustedProxyCidrs` и перекатить релиз.
 
 ## Лицензия
