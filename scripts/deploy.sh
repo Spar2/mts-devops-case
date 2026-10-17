@@ -63,9 +63,16 @@ fi
 # "X-Canary: never" pins the stable smoke to stable pods while a canary ingress exists,
 # so the release under test is really the stable one.
 if ! X_CANARY=never "${ROOT}/scripts/smoke.sh"; then
-  printf 'smoke failed; helm rollback sensor 0 -n sensor --wait\n' >&2
-  # Revision 0 means the previous revision. The first install has none.
-  helm rollback sensor 0 -n sensor --wait || true
+  revs="$(helm history sensor -n sensor -o json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+  if [[ "${revs}" -le 1 ]]; then
+    # Первая установка: откатываться некуда, удаляем релиз целиком.
+    printf 'smoke failed on first install; helm uninstall sensor -n sensor\n' >&2
+    helm uninstall sensor -n sensor --wait || true
+  else
+    printf 'smoke failed; helm rollback sensor 0 -n sensor --wait\n' >&2
+    # Ревизия 0 = предыдущая.
+    helm rollback sensor 0 -n sensor --wait || true
+  fi
   exit 1
 fi
 

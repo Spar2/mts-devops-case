@@ -24,6 +24,10 @@ if [[ -z "${SOPS_AGE_KEY_FILE:-}" && -f "${key_file}" ]]; then
 fi
 
 cd "${root}"
+if [[ -f deploy/secrets/grafana-admin.enc.yaml ]]; then
+  kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+  sops -d deploy/secrets/grafana-admin.enc.yaml | kubectl apply -f -
+fi
 kubectl create namespace sensor --dry-run=client -o yaml | kubectl apply -f -
 out="$(sops -d deploy/secrets/sensor-secrets.enc.yaml | kubectl apply -f -)"
 echo "${out}"

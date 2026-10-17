@@ -127,6 +127,20 @@ recipient="$(age-keygen -y "${key_file}" | tr -d '\r' | paste -sd, -)"
 [[ "${recipient}" =~ ^age1[0-9a-z]+(,age1[0-9a-z]+)*$ ]] || die "Некорректный публичный ключ age: ${recipient}"
 write_recipient "${recipient}"
 
+# Пароль администратора Grafana: отдельный SOPS-файл, Secret grafana-admin в namespace monitoring.
+grafana_enc="${root}/deploy/secrets/grafana-admin.enc.yaml"
+if [[ ! -f "${grafana_enc}" ]]; then
+  gplain="$(mktemp "${root}/deploy/secrets/tmp.XXXXXX.enc.yaml")"
+  chmod 600 "${gplain}"
+  printf '%s\n' 'apiVersion: v1' 'kind: Secret' 'metadata:' '  name: grafana-admin' \
+    '  namespace: monitoring' 'type: Opaque' 'stringData:' '  admin-user: "admin"' >"${gplain}"
+  printf '  admin-password: "%s"\n' "$(openssl rand -hex 16)" >>"${gplain}"
+  (cd "${root}" && SOPS_AGE_KEY_FILE="${key_file}" sops --config "${sops_config}" --encrypt --in-place "${gplain}") \
+    || { rm -f "${gplain}"; die "sops не зашифровал пароль Grafana"; }
+  mv "${gplain}" "${grafana_enc}"
+  echo "Зашифрован ${grafana_enc} (пароль Grafana случайный, показывает make status)."
+fi
+
 if [[ -f "${enc_file}" ]]; then
   echo "Файл уже есть, не перезаписываю: ${enc_file}"
   mismatch=0

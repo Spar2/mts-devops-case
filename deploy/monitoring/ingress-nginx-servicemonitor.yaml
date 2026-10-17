@@ -1,0 +1,19 @@
+# Метрики ingress-nginx (controller.metrics.enabled=true в scripts/k3s-install.sh):
+# по ним canary.sh считает трафик и долю 5xx canary-Ingress.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ingress-nginx
+  namespace: monitoring
+  labels:
+    release: mon
+spec:
+  namespaceSelector:
+    matchNames: [ingress-nginx]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ingress-nginx
+      app.kubernetes.io/component: controller
+  endpoints:
+    - port: metrics
+      interval: 15s

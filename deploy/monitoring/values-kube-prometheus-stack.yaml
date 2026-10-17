@@ -78,14 +78,10 @@ alertmanager:
 grafana:
   enabled: true
   defaultDashboardsEnabled: true
-  # Demo login: admin / admin.
-  # Grafana 8.5 stores adminPassword in its own Secret. To use a prepared Secret
-  # instead, set admin.existingSecret and drop adminPassword. Keys: admin-user,
-  # admin-password.
-  adminUser: admin
-  adminPassword: admin
+  # Логин/пароль берутся из Secret grafana-admin (SOPS, создаёт scripts/secrets-init.sh,
+  # применяет scripts/secrets-apply.sh). Пароля в git нет; показывает make status.
   admin:
-    existingSecret: ""
+    existingSecret: grafana-admin
     userKey: admin-user
     passwordKey: admin-password
   persistence:

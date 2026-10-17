@@ -123,6 +123,37 @@ sink_hits() {
   printf '%s\n' "$n"
 }
 
+resolved_hits() {
+  local n
+  n="$(kubectl -n monitoring logs deploy/alert-sink 2>/dev/null | grep -c '"status": "resolved"' || true)"
+  n="${n//[^0-9]/}"
+  printf '%s\n' "${n:-0}"
+}
+
+# Вернуть API и дождаться resolved: алерт пропал из Prometheus и
+# в alert-sink пришло уведомление со status resolved.
+wait_resolved() {
+  local before state json deadline
+  before="$(resolved_hits)"
+  printf '%s scaling deployment/sensor-api back to 1\n' "$(now)"
+  kubectl -n sensor scale deployment/sensor-api --replicas=1
+  kubectl -n sensor rollout status deployment/sensor-api --timeout=180s
+  deadline=$((SECONDS + 240))
+  state="firing"
+  while (( SECONDS < deadline )); do
+    if json="$(prom_json)"; then
+      state="$(parse_alert prom SensorGatewayDown "$json" || echo invalid)"
+    fi
+    if [[ "$state" == "absent" ]] && (( $(resolved_hits) > before )); then
+      pass "SensorGatewayDown resolved; alert-sink got status resolved"
+      return 0
+    fi
+    sleep_remaining "$deadline" 10
+  done
+  printf 'FAIL SensorGatewayDown not resolved within 4m (prometheus state=%s)\n' "$state" >&2
+  exit 1
+}
+
 restore() {
   local rc=${1:-1}
   trap - EXIT INT TERM
@@ -264,6 +295,7 @@ main() {
     hits_now="$(sink_hits)"
     if [[ "$hits_now" =~ ^[0-9]+$ ]] && (( hits_now > hits_before )); then
       pass "alert-sink log contains SensorGatewayDown"
+      wait_resolved
       return 0
     fi
     sleep_remaining "$log_deadline" 5

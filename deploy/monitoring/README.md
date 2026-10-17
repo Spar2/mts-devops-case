@@ -21,7 +21,7 @@ API пишет текст Prometheus на `GET /metrics`.
 
 Алерт **SensorGatewayDown** (critical, 1 минута) считает `(sum(up{namespace="sensor", service=~".*-api"}) or vector(0)) == 0`. При `scale --replicas=0` ряд `service_up` исчезает вместе с подом, и сравнение `max(service_up) < 1` не получает точку. `or vector(0)` превращает «рядов нет» в ноль, и алерт зажигается. Пока жив хотя бы один Service `*-api`, сумма больше нуля.
 
-Алерт **SensorGatewaySlowProbe** (warning, 5 минут): `service_probe_latency_seconds > 0.5`.
+Алерты **SensorGatewayNoReplicas** (critical: у Deployment в namespace sensor spec.replicas>0, а доступных реплик 0 минуту, kube-state-metrics) и **SensorGatewayPodRestarts** (warning: больше 3 рестартов контейнера за 15 минут).
 
 ## Доставка
 

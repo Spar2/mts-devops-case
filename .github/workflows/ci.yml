@@ -44,7 +44,7 @@ jobs:
         working-directory: apps/web
 
   images:
-    needs: [lint, api, web]
+    needs: [lint, api, web, helm, manifests, dockerfiles, shellcheck]
     runs-on: ubuntu-24.04
     permissions:
       contents: read

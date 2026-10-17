@@ -33,7 +33,7 @@ jobs:
           - mode: k3s
             k3d: "0"
             ingress_port: "80"
-            kubeconfig: /etc/rancher/k3s/k3s.yaml
+            kubeconfig: /home/runner/.kube/config
     env:
       K3D: ${{ matrix.k3d }}
       INGRESS_PORT: ${{ matrix.ingress_port }}

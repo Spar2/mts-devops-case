@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Idempotent cluster bootstrap.
-# Default: k3s v1.31.4+k3s1, traefik off, ServiceLB on, kubeconfig mode 644.
+# Default: k3s v1.31.4+k3s1, traefik off, ServiceLB on, kubeconfig mode 600 (копия для пользователя в ~/.kube/config, 600).
 # K3D=1: k3d cluster "mts" (rancher/k3s:v1.31.4-k3s1, host port 8081 -> LB 80).
 # Then Helm 3.16.3 if missing, and ingress-nginx 4.11.3 as a LoadBalancer
 # without hostNetwork (k3s ServiceLB publishes it).
@@ -94,7 +94,7 @@ k3s_matches() {
   local flat
   flat="$(printf '%s' "${blob}" | tr '\n' ' ')"
   grep -Eq -- 'disable[^[:alnum:]]+traefik' <<<"${flat}" || return 1
-  grep -Eq -- 'write-kubeconfig-mode[^0-9]*644' <<<"${flat}" || return 1
+  grep -Eq -- 'write-kubeconfig-mode[^0-9]*600' <<<"${flat}" || return 1
   return 0
 }
 
@@ -107,15 +107,18 @@ install_k3s() {
     if [[ "$(id -u)" -eq 0 ]]; then
       curl -sfL https://get.k3s.io | env INSTALL_K3S_VERSION="${K3S_VERSION}" sh -s - \
         --disable traefik \
-        --write-kubeconfig-mode 644
+        --write-kubeconfig-mode 600
     else
       curl -sfL https://get.k3s.io | sudo env INSTALL_K3S_VERSION="${K3S_VERSION}" sh -s - \
         --disable traefik \
-        --write-kubeconfig-mode 644
+        --write-kubeconfig-mode 600
     fi
   fi
   if [[ -f /etc/rancher/k3s/k3s.yaml ]]; then
-    run_root chmod 644 /etc/rancher/k3s/k3s.yaml
+    # Админ-kubeconfig не должен читаться всеми пользователями хоста.
+    run_root chmod 600 /etc/rancher/k3s/k3s.yaml
+    mkdir -p "${HOME}/.kube"
+    run_root install -m 600 -o "$(id -u)" -g "$(id -g)" /etc/rancher/k3s/k3s.yaml "${HOME}/.kube/config"
   fi
   if [[ ! -e /usr/local/bin/kubectl ]]; then
     run_root ln -s /usr/local/bin/k3s /usr/local/bin/kubectl
@@ -124,7 +127,7 @@ install_k3s() {
   if command -v systemctl >/dev/null 2>&1; then
     run_root systemctl enable --now k3s
   fi
-  export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+  export KUBECONFIG="${HOME}/.kube/config"
 }
 
 k3d_cluster_exists() {
@@ -204,6 +207,7 @@ install_ingress_nginx() {
     --namespace ingress-nginx \
     --create-namespace \
     --set controller.kind=Deployment \
+    --set controller.metrics.enabled=true \
     --set controller.hostNetwork=false \
     --set controller.dnsPolicy=ClusterFirst \
     --set controller.service.type="${INGRESS_SERVICE_TYPE:-LoadBalancer}" \

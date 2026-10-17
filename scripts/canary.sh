@@ -8,7 +8,7 @@
 #                      to the sensor-canary install only (not the promote)
 #   PROM_URL           Prometheus base URL, default http://127.0.0.1:9090
 #   ANALYSIS_WAIT_S    seconds to wait after canary load before the metric
-#                      queries, default 40
+#                      queries, default 75
 #   BASE_URL           same as smoke.sh; INGRESS_PORT used when it is unset
 #
 # Each step installs release sensor-canary (track=canary, canary.enabled=true,
@@ -263,15 +263,27 @@ check_sample() {
 
 metric_gate() {
   local weight=$1
-  local q_up q_rate
+  local q_up q_rate q_err
   q_up='min(up{namespace="sensor",service="sensor-canary-api"})'
-  q_rate='sum(rate(http_requests_total{namespace="sensor",service="sensor-canary-api"}[2m]))'
+  # Трафик и ошибки считаем по ingress-nginx (canary-Ingress), а не по метрикам API:
+  # пробы kubelet и scrape в эти ряды не попадают.
+  q_rate='sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m]))'
+  q_err='(sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+",status=~"5.."}[2m])) or vector(0)) / sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m]))'
 
   if ! prom_reachable; then
-    step "WARN prometheus unreachable at ${prom_url}; relying on smoke only"
-    return 0
+    rollback_canary "prometheus unreachable at ${prom_url}; metric gate cannot run"
   fi
 
+  # Новый ServiceMonitor canary Prometheus подхватывает не сразу (operator + reload):
+  # ждём появления target до 180 с, иначе это откат.
+  local t0=$SECONDS
+  until prom_sample "$q_up" >/dev/null 2>&1; do
+    if (( SECONDS - t0 > 180 )); then
+      rollback_canary "prometheus has no target sensor-canary-api after 180s at weight ${weight}"
+    fi
+    sleep 5
+  done
+  step "prometheus sees sensor-canary-api after $((SECONDS - t0))s"
   generate_canary_load
   step "waiting ${analysis_wait}s before prometheus analysis"
   sleep "$analysis_wait"
@@ -285,9 +297,16 @@ metric_gate() {
 
   step "query ${q_rate}"
   check_sample "$q_rate" "$weight"
-  step "sum(rate http_requests_total sensor-canary-api)=${sample_value}"
+  step "canary ingress request rate=${sample_value}/s"
   if ! metric_positive "$sample_value"; then
     rollback_canary "${q_rate}=${sample_value} at weight ${weight}, want > 0"
+  fi
+
+  step "query ${q_err}"
+  check_sample "$q_err" "$weight"
+  step "canary 5xx ratio=${sample_value}"
+  if ! awk -v v="$sample_value" 'BEGIN { exit !(v + 0 < 0.05) }'; then
+    rollback_canary "canary 5xx ratio ${sample_value} at weight ${weight}, want < 0.05"
   fi
   step "PASS metrics at weight ${weight}"
 }

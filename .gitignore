@@ -6,3 +6,9 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .venv/
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl.bak
+deploy/secrets/sops.local.yaml
+*.enc.yaml

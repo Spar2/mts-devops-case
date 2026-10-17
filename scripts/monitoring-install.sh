@@ -20,4 +20,5 @@ helm upgrade --install mon prometheus-community/kube-prometheus-stack \
 kubectl apply -f "${root}/deploy/monitoring/dashboard-configmap.yaml"
 kubectl apply -f "${root}/deploy/monitoring/prometheusrule.yaml"
 kubectl apply -f "${root}/deploy/monitoring/alert-sink.yaml"
+kubectl apply -f "${root}/deploy/monitoring/ingress-nginx-servicemonitor.yaml"
 kubectl -n monitoring rollout status deployment/alert-sink --timeout=180s

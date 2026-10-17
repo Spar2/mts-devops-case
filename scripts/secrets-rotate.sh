@@ -44,4 +44,4 @@ kubectl -n sensor rollout restart deploy -l app.kubernetes.io/component=api
 kubectl -n sensor rollout status deploy -l app.kubernetes.io/component=api --timeout=180s
 
 echo "Deployment с меткой app.kubernetes.io/component=api перезапущен."
-echo "Закоммитьте ${enc_rel}. Приватный ключ age в git не класть."
+echo "${enc_rel} локальный (в .gitignore), в git не попадает. Приватный ключ age тоже."

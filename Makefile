@@ -1,4 +1,4 @@
-.PHONY: up down demo demo-down test logs status k8s-up k8s-images k8s-deploy k8s-canary k8s-canary-fail k8s-rollback-demo k8s-alert-demo k8s-netpol-check k8s-rotate-demo k8s-down lint
+.PHONY: ghcr-secret k8s-deploy-ghcr up down demo demo-down test logs status k8s-up k8s-images k8s-deploy k8s-canary k8s-canary-fail k8s-rollback-demo k8s-alert-demo k8s-netpol-check k8s-rotate-demo k8s-down lint
 
 # Полное решение за 3 команды (git clone, cd, make up): k3d-кластер (k3s v1.31.4 в Docker) + ingress-nginx +
 # SOPS-секрет + kube-prometheus-stack + Helm-релиз + smoke. Нужен только Docker; ~5 минут, 8 ГБ RAM.
@@ -20,7 +20,7 @@ logs:
 	docker compose logs -f --tail=100
 
 test:
-	cd services/api && python -m pip install -r requirements.txt && python -m pytest
+	cd services/api && python3 -m pip install -r requirements.txt && python3 -m pytest
 	cd apps/web && npm ci && npm run build
 
 lint:
@@ -36,7 +36,7 @@ export INGRESS_PORT ?= 8081
 export KUBECONFIG ?= $(HOME)/.kube/config
 IMPORT_CMD = k3d image import -c mts
 else
-export KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
+export KUBECONFIG ?= $(HOME)/.kube/config
 export INGRESS_PORT ?= 80
 IMPORT_CMD = docker save $(PREFIX)/sensor-gateway:$(TAG) $(PREFIX)/sensor-web:$(TAG) | sudo k3s ctr images import -
 endif
@@ -60,13 +60,24 @@ else
 	$(IMPORT_CMD)
 endif
 
+# Опционально: брать образы, которые пушит CI, из приватного GHCR.
+# GHCR_USER=<login> GHCR_TOKEN=<PAT с read:packages> make ghcr-secret
+# затем make k8s-deploy-ghcr TAG=<короткий sha коммита из main>.
+ghcr-secret:
+	@test -n "$$GHCR_USER" -a -n "$$GHCR_TOKEN" || { echo "нужны GHCR_USER и GHCR_TOKEN (read:packages)"; exit 1; }
+	kubectl create namespace sensor --dry-run=client -o yaml | kubectl apply -f -
+	@kubectl -n sensor create secret docker-registry ghcr --docker-server=ghcr.io \
+	  --docker-username="$$GHCR_USER" --docker-password="$$GHCR_TOKEN" --dry-run=client -o yaml | kubectl apply -f -
+
+k8s-deploy-ghcr:
+	HELM_ARGS="--set imagePullSecrets[0].name=ghcr" ./scripts/deploy.sh $(TAG)
+
 k8s-deploy:
 	./scripts/deploy.sh $(TAG)
 
 # Метрический гейт canary читает Prometheus по PROM_URL (по умолчанию port-forward на 9090).
 k8s-canary:
-	@pgrep -f "port-forward svc/mon-kube-prometheus-stack-prometheus" >/dev/null || \
-	  (kubectl -n monitoring port-forward svc/mon-kube-prometheus-stack-prometheus 9090:9090 >/dev/null 2>&1 &) ; sleep 2
+	./scripts/prom-forward.sh
 	./scripts/canary.sh $(TAG)
 
 k8s-rollback-demo:
@@ -76,7 +87,8 @@ status:
 	@echo
 	@echo "Приложение: http://sensor.localtest.me:$(INGRESS_PORT)  логин demo, пароль:"
 	@kubectl -n sensor get secret sensor-secrets -o jsonpath='{.data.DEMO_PASSWORD}' | base64 -d; echo
-	@echo "Grafana:    http://grafana.localtest.me:$(INGRESS_PORT)  (admin/admin, дашборд sensor-gateway)"
+	@echo "Grafana:    http://grafana.localtest.me:$(INGRESS_PORT)  логин admin, пароль (дашборд sensor-gateway):"
+	@kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo
 	@echo "Демо: make k8s-canary | make k8s-canary-fail | make k8s-rollback-demo | make k8s-rotate-demo | make k8s-alert-demo"
 
 k8s-canary-fail:

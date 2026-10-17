@@ -17,11 +17,18 @@ spec:
           annotations:
             summary: "sensor-gateway: API не отвечает"
             description: "В namespace sensor уже минуту нет ни одного живого target Service *-api (stable sensor-api и канарейка sensor-canary-api). sum(up) равен 0, в том числе когда поды сняты и ряд up исчез."
-        - alert: SensorGatewaySlowProbe
-          expr: service_probe_latency_seconds > 0.5
-          for: 5m
+        - alert: SensorGatewayNoReplicas
+          expr: (kube_deployment_spec_replicas{namespace="sensor"} > 0) and on(namespace, deployment) (kube_deployment_status_replicas_available{namespace="sensor"} == 0)
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "sensor-gateway: у Deployment {{ $labels.deployment }} нет доступных реплик"
+            description: "Deployment {{ $labels.deployment }} в namespace sensor должен иметь реплики, но доступных 0 уже минуту (kube-state-metrics)."
+        - alert: SensorGatewayPodRestarts
+          expr: increase(kube_pod_container_status_restarts_total{namespace="sensor"}[15m]) > 3
           labels:
             severity: warning
           annotations:
-            summary: "sensor-gateway: медленная проверка службы"
-            description: "service_probe_latency_seconds больше 0.5 с уже 5 минут. Это задержка последнего POST /api/v1/service/probe из окна «Служба»."
+            summary: "sensor-gateway: контейнер {{ $labels.container }} перезапускается"
+            description: "Под {{ $labels.pod }} перезапустился больше 3 раз за 15 минут (crash loop или падающая liveness-проба)."
