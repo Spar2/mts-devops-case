@@ -1,5 +1,7 @@
 # Проверка алерта SensorGatewayDown (k3d, 2026-10-17 MSK)
 
+Этот лог — только `SensorGatewayDown` (`scale --replicas=0`). `SensorGatewayHighLatency` (p95 гистограммы `http_request_duration_seconds` > 0.5 с, 2 минуты) добавлен позже и здесь не зажигался. `make k8s-alert-demo` по-прежнему проверяет доставку `SensorGatewayDown`; имя задержки тоже попадает в маршрут `SensorGateway.*`.
+
 Стенд: k3s v1.31.4+k3s1 на box, kube-prometheus-stack 65.1.1, релиз `sensor` в ns `sensor`. k3d в `scripts/k3s-install.sh` — v5.8.3; в этом абзаце раньше стояло v5.7.5, такого пина в репозитории нет.
 Образы мониторинга импортированы через `scripts/k3d-preload-images.sh` (из подов box нет egress).
 

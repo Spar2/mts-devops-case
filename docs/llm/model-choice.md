@@ -12,7 +12,7 @@
 3. `rule2`: «critical, если process_resident_memory_bytes > 400MB в течение 10m».
 4. `explain`: объяснить провал canary и откат по логу `llm/examples/canary-fail.log` (выдержка из `docs/cd-demo-log.md`).
 
-Фразы выше — текст этого повтора, не задач остальных строк таблицы. `process_resident_memory_bytes` и метки `status`/`path` у `http_requests_total` сервис не отдаёт: `/metrics` в `services/api/app/main.py` пишет сам, без `prometheus_client` и process collector. Текущий список в `llm/llm_gen.py`: `up`, `service_up`, `service_probe_latency_seconds`, `http_requests_total`.
+Фразы выше — текст этого повтора, не задач остальных строк таблицы. На повтор 2026-10-17 список в `llm/llm_gen.py` был `up`, `service_up`, `service_probe_latency_seconds`, `http_requests_total` без меток: `/metrics` писался вручную, `process_resident_memory_bytes` и метки `status`/`path` сервис не отдавал. Сейчас API пишет метрики через `prometheus_client` 0.26.0 (`http_requests_total` и `http_request_duration_seconds` с `method`, `path`, `status`, `service_up` по проверке готовности, измеренный `service_probe_latency_seconds`, process collector). Актуальная строка для модели — `KNOWN_METRICS` в `llm/llm_gen.py`.
 
 «Валидно» = прошёл YAML + структура + `release: mon` + `promtool check rules` (Prometheus v2.54.1), допускался один
 раунд исправления по ошибкам валидатора. «Смысл» — ручная проверка выражения человеком.
