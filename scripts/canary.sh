@@ -17,7 +17,7 @@
 #   2. Prometheus instant queries, after 10 requests with "X-Canary: always":
 #        min(up{namespace="sensor",service="sensor-canary-api"}) == 1
 #        sum(rate(http_requests_total{namespace="sensor",service="sensor-canary-api"}[2m])) > 0
-#      If PROM_URL accepts no TCP connection, print WARN and keep smoke only.
+#      If PROM_URL accepts no TCP connection, the canary is rolled back.
 # A failed install or gate sets weight 0, uninstalls sensor-canary, prints
 # "ROLLBACK canary: <reason>", and does not change release sensor.
 # Success: scripts/deploy.sh TAG, then uninstall sensor-canary.
@@ -181,11 +181,15 @@ install_canary() {
   if ((${#canary_extra[@]} > 0)); then
     cmd+=("${canary_extra[@]}")
   fi
-  "${cmd[@]}"
+  "${cmd[@]}" || return 1
+  # Без готовых подов canary ingress-nginx молча отдаёт трафик stable, и smoke
+  # проверил бы не тот релиз: явно ждём оба Deployment canary.
+  kubectl -n sensor rollout status deployment/sensor-canary-api --timeout=120s || return 1
+  kubectl -n sensor rollout status deployment/sensor-canary-web --timeout=120s || return 1
 }
 
 # 0 when ${PROM_URL}/-/ready answers any HTTP status. Connection failure is
-# unreachable: the caller then keeps the smoke gate and skips metrics.
+# unreachable: metric_gate then rolls the canary back.
 prom_reachable() {
   local status
   status="$(

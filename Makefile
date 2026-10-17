@@ -42,12 +42,14 @@ IMPORT_CMD = docker save $(PREFIX)/sensor-gateway:$(TAG) $(PREFIX)/sensor-web:$(
 endif
 export K3D
 
+# Образы собираются до kube-prometheus-stack: ниже пик RAM на ВМ 8 ГБ.
 k8s-up:
 	./scripts/k3s-install.sh
 	./scripts/secrets-init.sh
 	./scripts/secrets-apply.sh
+	$(MAKE) k8s-images
 	./scripts/monitoring-install.sh
-	$(MAKE) k8s-images k8s-deploy
+	$(MAKE) k8s-deploy
 
 # Образы собираются локально и импортируются в containerd k3s: не нужен доступ к приватному GHCR.
 # Чтобы брать образы из GHCR (их пушит CI), выполнить: make k8s-deploy TAG=<sha> после docker login/pull secret.

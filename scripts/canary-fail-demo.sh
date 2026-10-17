@@ -121,6 +121,7 @@ metadata:
 type: Opaque
 stringData:
   DEMO_PASSWORD: "${password}"
+  SESSION_SECRET: "$(openssl rand -hex 24)"
 EOF
 kubectl apply -f "$secret_file"
 rm -f -- "$secret_file"
@@ -140,8 +141,8 @@ if [[ "$status" -eq 0 ]]; then
   printf 'FAIL canary-fail-demo: canary.sh exited 0, expected rollback\n' >&2
   exit 1
 fi
-if ! grep -F 'ROLLBACK canary:' "$log" >/dev/null; then
-  printf 'FAIL canary-fail-demo: canary.sh exited %s without rollback\n' "$status" >&2
+if ! grep -F 'ROLLBACK canary: smoke failed' "$log" >/dev/null; then
+  printf 'FAIL canary-fail-demo: canary.sh exited %s without the expected smoke rollback\n' "$status" >&2
   exit 1
 fi
 step "canary.sh rolled back (exit ${status})"
