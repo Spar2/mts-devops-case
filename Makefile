@@ -1,4 +1,4 @@
-.PHONY: ghcr-secret k8s-deploy-ghcr up down demo demo-down test logs status k8s-up k8s-images k8s-deploy k8s-canary k8s-canary-fail k8s-rollback-demo k8s-alert-demo k8s-netpol-check k8s-rotate-demo k8s-down lint
+.PHONY: ghcr-secret k8s-deploy-ghcr up down demo demo-down test logs status k8s-up k8s-images k8s-deploy k8s-canary k8s-canary-fail k8s-rollback-demo k8s-alert-demo k8s-netpol-check k8s-rotate-demo k8s-down lint lint-ruff lint-tools lint-helm lint-manifests lint-dockerfiles lint-shellcheck
 
 # Полное решение за 3 команды (git clone, cd, make up): k3d-кластер (k3s v1.31.4 в Docker) + ingress-nginx +
 # SOPS-секрет + kube-prometheus-stack + Helm-релиз + smoke. Нужен только Docker; ~5 минут, 8 ГБ RAM.
@@ -23,9 +23,67 @@ test:
 	cd services/api && python3 -m pip install -r requirements.txt && python3 -m pytest
 	cd apps/web && npm ci && npm run build
 
-lint:
-	ruff check services/api
-	helm lint deploy/helm/sensor-gateway
+# Локальный повтор CI (jobs lint, helm, manifests, dockerfiles, shellcheck и ruff из job llm).
+# Бинарь нужной версии берётся из PATH. Иначе: ruff/hadolint/shellcheck — docker-образ
+# с тем же тегом; helm и kubeconform — ~/.local/bin со сверкой sha256 (scripts/lint-manifests.sh).
+RUFF_IMAGE ?= ghcr.io/astral-sh/ruff:0.8.4
+HADOLINT_IMAGE ?= hadolint/hadolint:v2.12.0
+SHELLCHECK_IMAGE ?= koalaman/shellcheck:v0.10.0
+
+lint: lint-ruff lint-helm lint-manifests lint-dockerfiles lint-shellcheck
+
+# ruff 0.8.4: services/api (job lint) и каталог llm (job llm).
+lint-ruff:
+	@set -eu; \
+	run() { \
+	  if command -v ruff >/dev/null 2>&1 && ruff version 2>/dev/null | head -n 1 | grep -q '^ruff 0.8.4$$'; then \
+	    ruff check "$$1"; \
+	  else \
+	    docker run --rm -v "$(CURDIR):/io" -w /io "$(RUFF_IMAGE)" check "$$1"; \
+	  fi; \
+	}; \
+	printf '%s\n' 'ruff check services/api'; \
+	run services/api; \
+	printf '%s\n' 'ruff check llm'; \
+	run llm
+
+# Поставить helm v3.16.3 и kubeconform 0.6.7, если в PATH ещё нет этой версии.
+lint-tools:
+	./scripts/lint-manifests.sh --ensure-tools
+
+# Helm v3.16.3: lint и template чарта (job helm). stdout template скрыт, ошибки видны.
+lint-helm: lint-tools
+	@export PATH="$${HOME}/.local/bin:$${PATH}"; \
+	helm lint deploy/helm/sensor-gateway; \
+	helm template sensor deploy/helm/sensor-gateway --namespace sensor >/dev/null
+
+# kubeconform 0.6.7: stable, canary и манифесты мониторинга (job manifests).
+lint-manifests: lint-tools
+	./scripts/lint-manifests.sh
+
+# hadolint 2.12.0, --failure-threshold error (job dockerfiles, hadolint-action@v3.1.0).
+lint-dockerfiles:
+	@set -eu; \
+	run() { \
+	  printf '%s\n' "hadolint $$1"; \
+	  if command -v hadolint >/dev/null 2>&1 && hadolint --version 2>/dev/null | grep -q 'Haskell Dockerfile Linter 2.12.0$$'; then \
+	    hadolint --failure-threshold error "$$1"; \
+	  else \
+	    docker run --rm --entrypoint /bin/hadolint -v "$(CURDIR):/io" -w /io "$(HADOLINT_IMAGE)" --failure-threshold error "$$1"; \
+	  fi; \
+	}; \
+	run services/api/Dockerfile; \
+	run apps/web/Dockerfile
+
+# shellcheck 0.10.0 для scripts/*.sh (job shellcheck).
+lint-shellcheck:
+	@set -eu; \
+	printf '%s\n' 'shellcheck scripts/*.sh'; \
+	if command -v shellcheck >/dev/null 2>&1 && shellcheck --version 2>/dev/null | grep -q '^version: 0.10.0$$'; then \
+	  shellcheck scripts/*.sh; \
+	else \
+	  docker run --rm -v "$(CURDIR):/mnt" -w /mnt "$(SHELLCHECK_IMAGE)" scripts/*.sh; \
+	fi
 
 # Полный контур: k3s + ingress-nginx + SOPS-секрет + kube-prometheus-stack + Helm-релиз.
 TAG ?= $(shell git rev-parse --short=7 HEAD)
