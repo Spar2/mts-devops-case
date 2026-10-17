@@ -197,23 +197,40 @@ def cmd_notes(args):
     return 0
 
 
+def cyrillic_share(text):
+    letters = [c for c in text if c.isalpha()]
+    return sum("а" <= c.lower() <= "я" or c in "ёЁ" for c in letters) / max(len(letters), 1)
+
+
 def cmd_explain(args):
     system = open(os.path.join(PROMPTS, "rollback-explain.system.txt"), encoding="utf-8").read()
     src = sys.stdin.read() if args.log == "-" else open(args.log, encoding="utf-8").read()
-    src = src[-6000:]
-    raw, sec, usage = chat(system, "Log:\n" + src, max_tokens=400)
-    # grounding check: every number with 3+ digits (HTTP codes, weights, timestamps) must occur in the log
+    src = src[-3500:]  # fits -c 2048 together with the prompt
+    user = "Лог:\n" + src + "\n\nОбъясни по-русски, по формату из системного сообщения."
+    raw, sec, usage = chat(system, user, max_tokens=400)
+    attempts = 1
+    if cyrillic_share(raw) < 0.5:
+        # language check with one retry: the model drifts to English on English logs
+        fix = [{"role": "assistant", "content": raw},
+               {"role": "user", "content": "Ответ не на русском. Перепиши тот же ответ полностью на русском языке, тот же формат."}]
+        raw, sec2, usage = chat(system, user, max_tokens=400, history=fix)
+        sec, attempts = sec + sec2, 2
+    # grounding check: every number with 3+ digits (HTTP codes, timestamps) must occur in the log
     invented = sorted({n for n in re.findall(r"\b\d{3,}\b", raw) if n not in src})
+    share = cyrillic_share(raw)
     errs = (["empty answer"] if not raw.strip() else []) + [f"number not in log: {n}" for n in invented]
+    if share < 0.5:
+        errs.append(f"not Russian: cyrillic share {share:.2f}")
     log_run({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "task": "explain", "model": MODEL, "seed": SEED,
              "temperature": 0, "prompt_file": "llm/prompts/rollback-explain.system.txt", "log": args.log,
-             "seconds": round(sec, 2), "usage": usage, "valid": not errs, "errors": errs})
+             "seconds": round(sec, 2), "attempts": attempts, "cyrillic_share": round(share, 2),
+             "usage": usage, "valid": not errs, "errors": errs})
     print(raw)
-    print(f"# model={MODEL} time={sec:.1f}s", file=sys.stderr)
+    print(f"# model={MODEL} time={sec:.1f}s attempts={attempts} cyrillic={share:.2f}", file=sys.stderr)
     if errs:
-        print("GROUNDING CHECK FAILED: " + "; ".join(errs), file=sys.stderr)
+        print("CHECK FAILED: " + "; ".join(errs), file=sys.stderr)
         return 1
-    print("GROUNDING CHECK OK", file=sys.stderr)
+    print("CHECK OK (русский язык, числа есть в логе)", file=sys.stderr)
     return 0
 
 

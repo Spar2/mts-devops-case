@@ -15,7 +15,7 @@
 
 | Модель (HF) | Формат | Файл | Лицензия | Генерация, ток/с | Prompt, ток/с | Память (docker stats) | Валидно rule0/1/2 | Смысл правил (вручную) | explain (вручную) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| [prism-ml/Ternary-Bonsai-2-4B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf) | Q2_0 (тернарные) | 1.21 ГБ | Apache-2.0 | 14.5 | 34 | 1.00 ГиБ | ✔/✔/✔ (с 1-й попытки) | rule2 верно; rule0 `rate()` по gauge, rule1 `path=".*"` — ловятся новым линтом | верно, конкретно, «stable не задет» |
+| [prism-ml/Ternary-Bonsai-2-4B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf) | Q2_0 (тернарные) | 1.21 ГБ | Apache-2.0 | 14.5 | 34 | 1.00 ГиБ | ✔/✔/✔ (с 1-й попытки) | rule2 верно; rule0 `rate()` по gauge, rule1 `path=".*"` — ловятся новым линтом | верно, конкретно, «stable не задет» (тогда на английском; после русского промпта — на русском, см. README) |
 | [prism-ml/Ternary-Bonsai-2-2B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-2B-gguf) | Q2_0 | 0.55 ГБ | Apache-2.0 | 38.0 | 90 | 0.71 ГиБ | ✔/✘/✔ | rule0, rule2 верно | в целом верно, придумал имя релиза |
 | [prism-ml/Bonsai-8B-gguf](https://huggingface.co/prism-ml/Bonsai-8B-gguf) | Q1_0 (1-бит) | 1.16 ГБ | Apache-2.0 | 16.9 | 26 | 1.10 ГиБ | ✘/✘/✘ | — | верно |
 | [prism-ml/Bonsai-4B-gguf](https://huggingface.co/prism-ml/Bonsai-4B-gguf) | Q1_0 | 0.57 ГБ | Apache-2.0 | 29.1 | 43 | 1.49 ГиБ | ✔/✘/✘ | — | верно, на английском, путает PASS/FAIL |

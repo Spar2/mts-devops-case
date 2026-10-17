@@ -1,0 +1,13 @@
+API Service sensor-canary-api port http:8000. Web Service sensor-canary-web port http:80.
+ServiceMonitor sensor-canary-api (label release=mon, path /metrics) is applied when monitoring.coreos.com/v1/ServiceMonitor exists.
+2026-10-17T01:57:28Z helm uninstall sensor-canary
+release "sensor-canary" uninstalled
+2026-10-17T01:57:29Z ROLLBACK canary: smoke failed at weight 10
+llm-explain: модель объясняет откат (таймаут 240 с, откат уже выполнен)...
+llm-explain (черновик от LLM, проверено: русский язык, числа есть в логе) -> /workspace/llm-work/repo/llm/out/canary-explain-20261017T045729.md
+  | - Что упало: проверка `ready` вернула HTTP 000 вместо 200, а `metrics` — HTTP 000 вместо `service_up 1`.
+  | - Что сделал конвейер: вес canary выставлен в 0, релиз sensor-canary удалён.
+  | - Затронут ли stable: нет — в логе нет изменений в smoke stable, он прошёл успешно.
+  | - Вероятная причина: не видно в логе (отсутствует информация о готовности контейнера или ошибке в конфигурации).
+  | - Что проверить дальше: `kubectl -n sensor describe pod -l sensor.mts/track=canary`, логи контейнера api.
+2026-10-17T01:58:01Z canary.sh rolled back (exit 1)

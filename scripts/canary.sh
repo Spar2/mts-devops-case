@@ -105,6 +105,14 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 chart="${ROOT}/deploy/helm/sensor-gateway"
+
+# Опционально: если локальная LLM доступна (make llm-up), вывод пишется ещё и в лог, чтобы при откате
+# scripts/llm-explain-hook.sh объяснил причину. Best-effort: на откат и код выхода не влияет. LLM_EXPLAIN=0 — выключить.
+canary_log=""
+if [[ "${LLM_EXPLAIN:-auto}" != 0 ]] && curl -sf -m 2 "${LLM_URL:-http://127.0.0.1:8090}/health" >/dev/null 2>&1; then
+  canary_log="$(mktemp)"
+  exec > >(tee -a "$canary_log") 2>&1
+fi
 prefix="${IMAGE_REPO_PREFIX:-ghcr.io/spar2/mts-devops-case}"
 prefix="${prefix%/}"
 if [[ ! "$prefix" =~ ^[A-Za-z0-9._:/-]+$ ]]; then
@@ -144,6 +152,10 @@ rollback_canary() {
   step "helm uninstall sensor-canary"
   helm uninstall sensor-canary -n sensor --wait --timeout 3m --ignore-not-found || true
   printf '%s ROLLBACK canary: %s\n' "$(now)" "$reason"
+  if [[ -n "$canary_log" ]]; then
+    "${ROOT}/scripts/llm-explain-hook.sh" "$reason" "$canary_log" || true
+    rm -f -- "$canary_log"
+  fi
   exit 1
 }
 

@@ -183,3 +183,6 @@ kubeconfig 600; алерты NoReplicas/PodRestarts вместо бесполе�
 исправления: `Validation failed:\n- <ошибки валидатора>\nReturn the corrected full YAML only.`
 Экономия времени: черновик правила с проверкой ~16–26 с против ~5–10 мин ручного написания и прогона promtool
 (оценка, хронометраж ручного варианта не вёлся).
+
+Доработка 2026-10-17 05:00: промпт `rollback-explain.system.txt` переписан на русском с примером ответа (few-shot),
+добавлены проверка доли кириллицы с одним повтором и хук `scripts/llm-explain-hook.sh` в `canary.sh`.
