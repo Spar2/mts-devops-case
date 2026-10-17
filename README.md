@@ -36,10 +36,10 @@
 | Сканирование образов | job `images` и job `iac` (config: чарт, Dockerfile, Terraform), `trivy-action` v0.36.0 (Trivy v0.70.0), HIGH/CRITICAL; SBOM (anchore/sbom-action) на `main` | Actions → images и iac | Образы: CVE (Starlette, OpenSSL в alpine) исправлены, прогон зелёный. Config: локально Trivy 0.70.0, чарт и Terraform без HIGH/CRITICAL; DS-0002 nginx-образа — `apps/web/.trivyignore` |
 | Публикация в registry | там же, push в `ghcr.io/spar2/mts-devops-case/*` только из `main` | Actions → images → Push images | Шаг выполняется в зелёном прогоне |
 | Проверка манифестов | `scripts/lint-manifests.sh` (kubeconform 0.6.7: stable, canary, два манифеста мониторинга), hadolint 2.12.0, shellcheck 0.10.0 | `make lint` | Проверено локально: `make lint` код 0. Сломанный YAML и скрипт с ошибкой shellcheck дают ненулевой код (правки откачены). Job `manifests` вызывает тот же скрипт |
-| CD: Helm + откат | `deploy/helm/sensor-gateway` (RollingUpdate `maxUnavailable: 0`, `preStop`), `scripts/deploy.sh` (`--atomic` + smoke + `helm rollback`) | `make k8s-rollback-demo` | Проверено: битый тег → откат `--atomic`; провал smoke → `helm rollback` (лог `docs/cd-demo-log.md`). Живой rollout после `preStop` не повторялся |
+| CD: Helm + откат | `deploy/helm/sensor-gateway` (RollingUpdate `maxUnavailable: 0`, `preStop`), `scripts/deploy.sh` (`--atomic` + smoke + `helm rollback`) | `make k8s-rollback-demo` | Проверено: битый тег → откат `--atomic`; провал smoke → `helm rollback` (лог `docs/cd-demo-log.md`). С `preStop` полный прогон с нуля на box 2026-10-17: `make up`, canary, canary-fail, rollback-demo, alert-demo — PASS |
 | CD: canary через ingress | `scripts/canary.sh` (вес 10→50→100, smoke + PromQL: `up`, трафик и доля 5xx canary по метрикам ingress-nginx) | `make k8s-canary` | Проверено: успешный canary с promote и провальный canary с автооткатом, stable не задет (`docs/cd-demo-log.md`) |
 | Сессии не теряются между stable и canary | подписанная cookie (HMAC) в `services/api/app/main.py` | тесты + запрос с cookie от stable в canary | Проверено: 200 на canary с cookie, выданной stable |
-| Секреты вне git | SOPS 3.9.2 + age 1.2.1, `scripts/secrets-*.sh`, `deploy/secrets/README.md` | `scripts/secrets-rotate-check.sh` | Лог 2026-10-17: старый пароль и cookie → 401, новый → 200 (`docs/secrets-rotation-log.md`). Позже на 1 реплике без паузы перед SIGTERM тот же скрипт получил 502; после `preStop` прогон не повторялся |
+| Секреты вне git | SOPS 3.9.2 + age 1.2.1, `scripts/secrets-*.sh`, `deploy/secrets/README.md` | `scripts/secrets-rotate-check.sh` | Лог 2026-10-17: старый пароль и cookie → 401, новый → 200 (`docs/secrets-rotation-log.md`). Без паузы перед SIGTERM на 1 реплике скрипт ловил 502; с `preStop` и ожиданием ухода старых подов в `secrets-rotate.sh` — 3 прогона подряд PASS на box 2026-10-17 |
 | Мониторинг: дашборд | `deploy/monitoring/` (kube-prometheus-stack 65.1.1) | Grafana → дашборд `sensor-gateway` | Проверено в k3d, скриншот `docs/img/grafana-sensor-gateway.png` |
 | Мониторинг: алерт | `deploy/monitoring/prometheusrule.yaml` | `kubectl -n sensor scale deploy sensor-api --replicas=0` | Проверено: `SensorGatewayDown` firing в Prometheus и в Alertmanager (`docs/monitoring-alert-proof.md`, скриншоты) |
 | Сеть ВМ (netplan) | `infra/cloud-init/network-config.yaml` → `libvirt_cloudinit_disk.network_config` | `cloud-init schema` (job `iac`) | Схема валидна (cloud-init 26.1); ВМ не поднималась |
@@ -249,7 +249,7 @@ make test
   схема не принимает: директивы `templatefile` ломают YAML. На GitHub job `iac` ещё не запускался. Внутри ВМ выполняется `make up K3D=0`, проверенный в e2e.
 - Доставка алертов: webhook в кластерный `alert-sink` (пишет тело в лог). Почта и мессенджеры не настраивались.
 - Видео: не записано в репозитории, его снимает команда (требования выше).
-- Повторный `make k8s-rotate-demo` после `preStop` не запускался. Предыдущий успешный лог — `docs/secrets-rotation-log.md`; прогон с 1 репликой без паузы перед SIGTERM получил 502 от nginx web.
+- `rollout status` возвращается, когда новые поды Ready, а старые ещё ~5 с отвечают в `preStop` со старым секретом. Поэтому `secrets-rotate.sh` и `secrets-apply.sh` после него ждут, пока старые поды API исчезнут: только после этого старый пароль гарантированно даёт 401.
 
 ## Мониторинг и наблюдаемость
 

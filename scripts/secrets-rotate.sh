@@ -42,6 +42,13 @@ kubectl create namespace sensor --dry-run=client -o yaml | kubectl apply -f -
 sops -d deploy/secrets/sensor-secrets.enc.yaml | kubectl apply -f -
 kubectl -n sensor rollout restart deploy -l app.kubernetes.io/component=api
 kubectl -n sensor rollout status deploy -l app.kubernetes.io/component=api --timeout=180s
+# rollout status возвращается, когда новые поды Ready; старые ещё ~5 с отвечают в preStop
+# со старым секретом. Ждём, пока они исчезнут: дальше секрет действует у всех подов API.
+for _ in $(seq 1 60); do
+  kubectl -n sensor get pods -l app.kubernetes.io/component=api \
+    -o jsonpath='{range .items[*]}{.metadata.deletionTimestamp}{"\n"}{end}' | grep -q . || break
+  sleep 1
+done
 
 echo "Deployment с меткой app.kubernetes.io/component=api перезапущен."
 echo "${enc_rel} локальный (в .gitignore), в git не попадает. Приватный ключ age тоже."
