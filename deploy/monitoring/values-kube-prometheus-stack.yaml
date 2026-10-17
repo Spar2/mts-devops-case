@@ -79,7 +79,7 @@ grafana:
   enabled: true
   defaultDashboardsEnabled: true
   # Логин/пароль берутся из Secret grafana-admin (SOPS, создаёт scripts/secrets-init.sh,
-  # применяет scripts/secrets-apply.sh). Пароля в git нет; показывает make status.
+  # применяет scripts/secrets-apply.sh). Пароля в git нет; значение — SHOW_SECRETS=1 make status.
   admin:
     existingSecret: grafana-admin
     userKey: admin-user
