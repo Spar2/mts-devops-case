@@ -23,3 +23,28 @@
 {{- if or (lt $weight 0) (gt $weight 100) -}}
 {{- fail "canary.weight must be between 0 and 100" -}}
 {{- end -}}
+{{- if ne .Values.track "canary" -}}
+{{- if .Values.pdb.enabled -}}
+{{- $pdbMin := .Values.pdb.minAvailable | int -}}
+{{- if lt $pdbMin 1 -}}
+{{- fail "pdb.minAvailable must be >= 1" -}}
+{{- end -}}
+{{- if or (le (.Values.api.replicas | int) $pdbMin) (le (.Values.web.replicas | int) $pdbMin) -}}
+{{- fail "pdb.minAvailable must be lower than api.replicas and web.replicas" -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.hpa.enabled -}}
+{{- $hpaMin := .Values.hpa.minReplicas | int -}}
+{{- $hpaMax := .Values.hpa.maxReplicas | int -}}
+{{- $hpaCPU := .Values.hpa.targetCPUUtilizationPercentage | int -}}
+{{- if or (lt $hpaMin 1) (lt $hpaMax $hpaMin) -}}
+{{- fail "hpa.minReplicas must be >= 1 and hpa.maxReplicas must be >= minReplicas" -}}
+{{- end -}}
+{{- if or (lt $hpaCPU 1) (gt $hpaCPU 100) -}}
+{{- fail "hpa.targetCPUUtilizationPercentage must be between 1 and 100" -}}
+{{- end -}}
+{{- if or (lt (.Values.api.replicas | int) $hpaMin) (lt (.Values.web.replicas | int) $hpaMin) -}}
+{{- fail "api.replicas and web.replicas must be >= hpa.minReplicas" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

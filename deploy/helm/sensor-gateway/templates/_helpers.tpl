@@ -24,6 +24,20 @@ Always
 {{- end }}
 
 {{/*
+Stable uses the values replica count. Canary is one pod: extra replicas
+make weight steps and helm uninstall wait on preStop.
+*/}}
+{{- define "sensor-gateway.componentReplicas" -}}
+{{- if eq .root.Values.track "canary" -}}
+1
+{{- else if eq .component "api" -}}
+{{- .root.Values.api.replicas -}}
+{{- else -}}
+{{- .root.Values.web.replicas -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Stock apps/web/nginx.conf proxies to hostname "api". Two releases in one
 namespace cannot both own that name, so the chart rewrites the same locations
 to this release's API Service.
