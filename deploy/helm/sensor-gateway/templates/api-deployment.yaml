@@ -13,6 +13,8 @@ spec:
     matchLabels:
       {{- include "sensor-gateway.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: api
+  # Старый под не снимаем, пока новый не Ready: иначе на единственной реплике
+  # запросу некуда идти.
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -24,6 +26,9 @@ spec:
         {{- include "sensor-gateway.labels" . | nindent 8 }}
         app.kubernetes.io/component: api
     spec:
+      # 5 с preStop входят в этот срок. Дальше SIGTERM: uvicorn сам закрывает приём
+      # и дожидается текущих запросов (timeout_graceful_shutdown не задан).
+      terminationGracePeriodSeconds: 40
       automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -49,6 +54,13 @@ spec:
                 - ALL
             seccompProfile:
               type: RuntimeDefault
+          # Пауза до SIGTERM: Endpoints и kube-proxy успевают убрать под,
+          # пока процесс ещё принимает запросы. /bin/sleep есть в образе и
+          # не пишет на диск (readOnlyRootFilesystem).
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sleep", "5"]
           ports:
             - name: http
               containerPort: 8000

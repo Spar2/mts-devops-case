@@ -13,6 +13,7 @@ spec:
     matchLabels:
       {{- include "sensor-gateway.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: web
+  # Как у API: новый под Ready раньше, чем снимается старый.
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -26,6 +27,9 @@ spec:
       annotations:
         checksum/nginx-config: {{ include "sensor-gateway.nginxConf" . | sha256sum | quote }}
     spec:
+      # Та же гонка, что у API, но уже со стороны ingress-nginx: SIGTERM уходит
+      # после паузы. 40 с покрывают sleep и остановку nginx.
+      terminationGracePeriodSeconds: 40
       automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -52,6 +56,11 @@ spec:
                 - DAC_OVERRIDE
             seccompProfile:
               type: RuntimeDefault
+          # /bin/sleep есть в nginx:1.29-alpine и не пишет на диск.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sleep", "5"]
           ports:
             - name: http
               containerPort: 80
