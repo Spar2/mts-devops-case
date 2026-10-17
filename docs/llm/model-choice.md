@@ -10,12 +10,14 @@
 3. `rule2`: «critical, если process_resident_memory_bytes > 400MB в течение 10m».
 4. `explain`: объяснить провал canary и откат по логу `llm/examples/canary-fail.log` (выдержка из `docs/cd-demo-log.md`).
 
+Задачи выше — снимок замера. `process_resident_memory_bytes` и метки `status`/`path` у `http_requests_total` сервис не отдаёт: `/metrics` в `services/api/app/main.py` пишет сам, без `prometheus_client` и process collector. Текущий список в `llm/llm_gen.py`: `up`, `service_up`, `service_probe_latency_seconds`, `http_requests_total`.
+
 «Валидно» = прошёл YAML + структура + `release: mon` + `promtool check rules` (Prometheus v2.54.1), допускался один
 раунд исправления по ошибкам валидатора. «Смысл» — ручная проверка выражения человеком.
 
 | Модель (HF) | Формат | Файл | Лицензия | Генерация, ток/с | Prompt, ток/с | Память (docker stats) | Валидно rule0/1/2 | Смысл правил (вручную) | explain (вручную) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| [prism-ml/Ternary-Bonsai-2-4B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf) | Q2_0 (тернарные) | 1.21 ГБ | Apache-2.0 | 14.5 | 34 | 1.00 ГиБ | ✔/✔/✔ (с 1-й попытки) | rule2 верно; rule0 `rate()` по gauge, rule1 `path=".*"` — ловятся новым линтом | верно, конкретно, «stable не задет» (тогда на английском; после русского промпта — на русском, см. README) |
+| [prism-ml/Ternary-Bonsai-2-4B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf) | Q2_0 (тернарные) | 1.21 ГБ | Apache-2.0 | 14.5 | 34 | 1.00 ГиБ | ✘ / ✔ с 1-й / ✔ со 2-й | повтор 2026-10-17: rule0 `sum(...[2m])` — promtool (range vector); rule1 `rate` + `status=~"5.."` прошёл; rule2 со 2-й — gauge > 400000000 | explain: проверки скрипта пройдены, 66.67 с, attempts 1 |
 | [prism-ml/Ternary-Bonsai-2-2B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-2B-gguf) | Q2_0 | 0.55 ГБ | Apache-2.0 | 38.0 | 90 | 0.71 ГиБ | ✔/✘/✔ | rule0, rule2 верно | в целом верно, придумал имя релиза |
 | [prism-ml/Bonsai-8B-gguf](https://huggingface.co/prism-ml/Bonsai-8B-gguf) | Q1_0 (1-бит) | 1.16 ГБ | Apache-2.0 | 16.9 | 26 | 1.10 ГиБ | ✘/✘/✘ | — | верно |
 | [prism-ml/Bonsai-4B-gguf](https://huggingface.co/prism-ml/Bonsai-4B-gguf) | Q1_0 | 0.57 ГБ | Apache-2.0 | 29.1 | 43 | 1.49 ГиБ | ✔/✘/✘ | — | верно, на английском, путает PASS/FAIL |
@@ -24,10 +26,18 @@
 | [Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF) | Q4_K_M | 0.49 ГБ | Apache-2.0 | 79.5 | 350 | 0.56 ГиБ | ✔/✘/✘ | — | поверхностно |
 
 Память в `docker stats` включает часть page cache от mmap весов и плавает; точный замер выбранной модели в рабочем
-режиме (`scripts/llm-up.sh`: `-c 2048 -np 1 --cache-ram 0`): пиковый RSS процесса **1.66 ГБ** = 0.47 ГБ анонимной памяти
+режиме (`scripts/llm-up.sh`: `-c 2048 -np 1 --cache-ram 0`): пиковый RSS процесса **1.66 ГБ** (прежний замер, в повторе 2026-10-17 не снимался) = 0.47 ГБ анонимной памяти
 (KV-кэш, буферы) + 1.19 ГБ отображённых весов (страницы файла, вытесняемые ядром). С настройками сервера по умолчанию
 (`-c 4096`, кэш промптов) было 2.19 ГБ — поэтому они переопределены.
-Сырые прогоны: `docs/llm/examples/runs.jsonl` (выбранная модель), дополнительно первый проход без цикла исправления:
+Колонки «Генерация», «Prompt» и «Память» — прежний замер (`-t 6`); в повторном прогоне 2026-10-17 их не снимали. Колонка «Валидно» у Ternary-Bonsai-2-4B — этот повтор.
+
+В `docs/llm/examples/runs.jsonl` два прогона.
+
+Ранний, метки `2026-10-17T04:36:52+0300` … `04:40:03+0300`: задачи на английском, не фразы rule0/1/2 выше. Четыре записи `task=rule` выбранной модели: 5xx valid 17.86 с (attempts 1), memory valid 15.71 с и 25.91 с (attempts 1), задержка invalid 46.01 с (attempts 2, promtool: range vector). Explain той же модели `04:38:57+0300`, 52.5 с, valid. Строка explain qwen — `04:58:01+0300`.
+
+Повтор, метки `2026-10-17T07:25:15+0000` … `07:28:24+0000`: `make llm-up` без `LLM_THREADS` (в контейнере `-t 4`, `--memory 2g`), затем `make llm-gen` ровно с тремя фразами выше и `make llm-explain`. С первой попытки valid одна из трёх. rule0: 51.11 с, attempts 2, valid false (в поле `errors` ещё первая загрузка `prom/prometheus:v2.54.1`, затем promtool: range vector в `sum`). rule1: 16.88 с, attempts 1, valid true. rule2: 104.27 с, attempts 2, valid true (первая попытка — `rate()` по gauge, вторая — сравнение с 400000000). explain: 66.67 с, attempts 1, valid true, `cyrillic_share` 0.6.
+
+Первый проход без цикла исправления (прежняя таблица, не повтор):
 все Bonsai-1.7B/4B/8B и Ternary-2-2B завалили ≥2 из 3 правил (чаще всего `metadata.name` с `_`, незакрытый ```yaml).
 
 ## Не включены
@@ -41,10 +51,8 @@
 
 ## Решение
 
-**Ternary-Bonsai-2-4B Q2_0** — по умолчанию (`LLM_NAME=ternary-bonsai-2-4b`): единственная модель, давшая 3/3 правила,
-прошедших YAML+promtool с первой попытки, и лучшее объяснение отката без фактических ошибок; Apache-2.0, без токена,
-стандартный llama.cpp. Цена — 14.5 ток/с (правило ~16–26 с, объяснение ~50 с) и пик RSS 1.66 ГБ, чуть выше цели 1.5 ГБ.
-Синтаксически валидные, но неверные по смыслу выражения (rule0, rule1) показали, что promtool недостаточно, —
+**Ternary-Bonsai-2-4B Q2_0** — по умолчанию (`LLM_NAME=ternary-bonsai-2-4b`). Повтор трёх фраз выше 2026-10-17 (`-t 4`): с первой попытки valid одна из трёх (только rule1, 16.88 с). rule0 не прошёл и со второй попытки (51.11 с), rule2 прошёл со второй (104.27 с), explain — 66.67 с, valid с первой. 14.5 ток/с и пик RSS 1.66 ГБ — прежний замер на `-t 6`, здесь не повторялись. Остальные модели в этот день заново не запускались. Apache-2.0, без токена, стандартный llama.cpp.
+На старом проходе синтаксически валидные, но неверные по смыслу выражения (rule0, rule1) показали, что promtool недостаточно, —
 в валидатор добавлены проверки `rate()` по gauge и regex в `=`-матчере; модели не доверяем без проверки и ревью.
 
 **Ternary-Bonsai-2-2B Q2_0** — запасной лёгкий вариант для машин с 8 ГБ (`make llm-up LLM_NAME=ternary-bonsai-2-2b`):

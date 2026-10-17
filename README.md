@@ -8,7 +8,7 @@
 
 Что есть на самом деле:
 
-- **CI (GitHub Actions, `ci.yml`).** На каждый push и pull request: линт, тесты, проверки манифестов, IaC (Terraform, Ansible, cloud-init, Trivy config), сборка, Trivy образов. Локально без сборки образов: `make lint` и `make test` (раздел «CI локально»; job `iac` и `images` в них не входят). Только на `main`: SBOM и push образов в приватный GHCR.
+- **CI (GitHub Actions, `ci.yml`).** На каждый push и pull request: линт, тесты, проверки манифестов, IaC (Terraform, Ansible, cloud-init, Trivy config), сборка, Trivy образов. Локально: `make lint` и `make test` — jobs `lint`, `api`, `web`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff` из job `llm`. Не входят job `images` и job `iac` (раздел «CI локально»). Только на `main`: SBOM и push образов в приватный GHCR.
 - **CD.** Выкладка в кластер идёт командами `make up`, `make k8s-deploy` и `make k8s-canary`: Helm `--atomic`, smoke, canary через ingress-nginx с PromQL-гейтом и автооткатом. По умолчанию образы собираются локально из того же коммита.
 - **e2e в Actions (`e2e.yml`).** На pull request в `main` (кроме правок только `*.md`/`docs/`) прогоняется только k3d. На push в `main` с тем же фильтром и вручную через `workflow_dispatch` — оба варианта, k3d и нативный k3s. Устаревший прогон того же PR отменяется; прогон `main` не прерывается. Секретов workflow не использует, образы собираются на раннере.
 - **Без CD-деплоя из Actions.** Отдельного деплоя в постоянный кластер из Actions нет: у проекта нет постоянного кластера, доступного GitHub.
@@ -30,8 +30,8 @@
 | Требование | Где лежит | Как проверить | Статус проверки |
 | --- | --- | --- | --- |
 | Запуск ≤ 3 командами | `Makefile` (`make up`) | `git clone … && cd mts-devops-case && make up` | Проверено: свежий клон e0fe907 на box без кластера, `make up` за 2 мин 0 с (smoke: вход, probe, 401 без cookie, `/metrics`); повторный `make k8s-up K3D=1` идемпотентен (1 мин 11 с). Тот же путь — в e2e GitHub Actions: k3d на pull request в `main`, k3d и нативный k3s на push в `main` и по `workflow_dispatch` |
-| IaC: кластер | `scripts/k3s-install.sh`, `infra/ansible/site.yml` | `make k8s-up` / `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` | k3d: свежий клон на box и e2e; нативный k3s (`make up K3D=0`): только e2e на `ubuntu-24.04`. Лог `docs/k8s-up-log.md`; плейбук прогонялся раньше, `failed=0`. syntax-check — job `iac` (ansible-core 2.17.14) |
-| IaC: ВМ | `infra/cloud-init/`, `infra/terraform/` (libvirt, lock 0.8.3) | job `iac`: `terraform fmt -check`, `init -backend=false`, `validate`, `cloud-init schema`; живой `terraform apply` (`vm_memory_mib`, `vm_vcpu`, `run_make_up`) и `terraform destroy` | Job `iac` зелёный на GitHub (pull request #3) и локально (Terraform 1.9.8, cloud-init 26.1, схемы `Valid`). Живой apply на box 2026-10-17: 2048 МиБ / 2 vCPU, `run_make_up=false`, cloud-init `status: done`, клон и пакеты, `vm_ip` совпал с DHCP. `make up` в госте не запускался. Лог `docs/iac-apply-log.md` |
+| IaC: кластер | `scripts/k3s-install.sh`, `infra/ansible/site.yml` | `make k8s-up` / `ansible-playbook -i infra/ansible/inventory.ini infra/ansible/site.yml` | k3d: свежий клон на box и e2e; нативный k3s (`make up K3D=0`): только e2e на `ubuntu-24.04`. Лог `docs/k8s-up-log.md`. Полный прогон плейбука в репозитории не залогирован; syntax-check — job `iac` (ansible-core 2.17.14) |
+| IaC: ВМ | `infra/cloud-init/`, `infra/terraform/` (libvirt, lock 0.8.3) | job `iac`: `terraform fmt -check`, `init -backend=false`, `validate`, `cloud-init schema`; живой `terraform apply` (`vm_memory_mib`, `vm_vcpu`, `run_make_up`) и `terraform destroy` | Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально (Terraform 1.9.8, cloud-init 26.1, схемы `Valid`). Живой apply на box 2026-10-17: 2048 МиБ / 2 vCPU, `run_make_up=false`, cloud-init `status: done`, клон и пакеты, `vm_ip` совпал с DHCP. `make up` в госте не запускался. Лог `docs/iac-apply-log.md` |
 | CI: линт, тесты, сборка | `.github/workflows/ci.yml` | вкладка Actions | Зелёный прогон на GitHub (jobs lint, api, web, helm, manifests, dockerfiles, shellcheck, llm, iac, images). Job `iac` зелёный на GitHub (pull request #3) и воспроизведён локально |
 | Сканирование образов | job `images` и job `iac` (config: чарт, Dockerfile, Terraform), `trivy-action` v0.36.0 (Trivy v0.70.0), HIGH/CRITICAL; SBOM (anchore/sbom-action) на `main` | Actions → images и iac | Образы: CVE (Starlette, OpenSSL в alpine) исправлены, прогон зелёный. Config: локально Trivy 0.70.0, чарт и Terraform без HIGH/CRITICAL; DS-0002 nginx-образа — `apps/web/.trivyignore` |
 | Публикация в registry | там же, push в `ghcr.io/spar2/mts-devops-case/*` только из `main` | Actions → images → Push images | Шаг выполняется в зелёном прогоне |
@@ -45,7 +45,7 @@
 | Сеть ВМ (netplan) | `infra/cloud-init/network-config.yaml` → `libvirt_cloudinit_disk.network_config` | `cloud-init schema` (job `iac`); в госте `sudo netplan get`, `ip addr` | Схема валидна (cloud-init 26.1, job `iac`). На ВМ 2026-10-17: DHCP, `match: en*`, `ens3` получил `192.168.122.188/24`; адрес совпал с `terraform output vm_ip` и арендой libvirt |
 | Безопасность подов | securityContext, NetworkPolicy, PDB в чарте | `make k8s-netpol-check` | NetworkPolicy проверена в e2e на GitHub (чужой namespace → BLOCKED, web → API → REACHED) |
 | Доставка алерта | Alertmanager → webhook `alert-sink` | `make k8s-alert-demo` | Проверено: firing → webhook → resolved (e2e и box) |
-| LLM: генерация конфигов с фиксацией промтов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Проверено на box: 3 правила, 2 приняты валидатором, 1 отвергнут promtool; job `llm` в CI |
+| LLM: генерация конфигов с фиксацией промптов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Повтор 2026-10-17 (`make llm-up`, `-t 4`): из трёх фраз в `docs/llm/model-choice.md` с первой попытки valid одна (5xx, 16.88 с). Задержка invalid, attempts 2, 51.11 с. Память valid со 2-й, 104.27 с. Explain valid, 66.67 с. Оба прогона в `docs/llm/examples/runs.jsonl`. Job `llm` в CI |
 | Видео ≤ 5 мин | `docs/demo-script.md` | — | Сценарий готов, ролик снимает команда |
 
 ## Состав команды (роли, опыт и навыки)
@@ -111,14 +111,14 @@ flowchart LR
 | ingress-nginx | чарт 4.11.3, https://kubernetes.github.io/ingress-nginx. Проект объявлен архивным 2026-03-24, версия зафиксирована и работает; на замену стоит смотреть Gateway API |
 | kube-prometheus-stack | чарт 65.1.1, https://prometheus-community.github.io/helm-charts (Prometheus 2.54.1, Grafana 11.2.1, Alertmanager 0.27.0) |
 | SOPS / age | 3.9.2 / 1.2.1 |
-| Ansible | ansible-core 2.17.14 (syntax-check в CI; полный прогон плейбука раньше на 2.17.5, `failed=0`) |
+| Ansible | ansible-core 2.17.14 (syntax-check в job `iac`; полный прогон плейбука в репозитории не залогирован) |
 | Terraform / провайдер | 1.9.8 / dmacvicar/libvirt 0.8.3. Lock-файл `infra/terraform/.terraform.lock.hcl` (в `versions.tf`: `>= 1.6`, `~> 0.8.1`). На box при живом apply ещё libvirt 11.3.0 и QEMU 10.0.13 |
-| cloud-init | 26.1 в CI (пакет ubuntu-24.04, версия в логе job `iac`) и в госте Ubuntu 24.04.5 (`status: done`); схема примера и network-config также на 25.1.4. `user-data.yaml.tftpl` — шаблон Terraform, в схему не подаётся |
+| cloud-init | На run 39006928822: 26.1-0ubuntu1~24.04.1 (пакет ubuntu-24.04 без пина, версия печатается в лог). Схема: `user-data.example.yaml` и `network-config.yaml`; `user-data.yaml.tftpl` не подаётся. В госте Ubuntu 24.04.5 — `26.1-0ubuntu1~24.04.1`, `status: done`. Схема на хосте прогона — 25.1.4. |
 | Локальная LLM (опц.) | llama.cpp server `b11681`, модель Ternary-Bonsai-2-4B Q2_0 (Apache-2.0), promtool из `prom/prometheus:v2.54.1` |
 | GitHub Actions | `ubuntu-24.04`, ruff 0.8.4, `docker/build-push-action@v6`, `aquasecurity/trivy-action@v0.36.0` (Trivy v0.70.0, образы и config), `hashicorp/setup-terraform@v4.0.1` (Terraform 1.9.8), ansible-core 2.17.14, cloud-init (пакет ubuntu-24.04), `anchore/sbom-action@v0.17.8`, kubeconform 0.6.7, hadolint 2.12.0 (`hadolint/hadolint-action@v3.1.0`, порог error), shellcheck 0.10.0 |
 | Приёмник алертов | `mendhak/http-https-echo:34` |
 
-Только открытые чарты из публичных репозиториев, версии зафиксированы.
+Только открытые чарты из публичных репозиториев. Чарты и бинарники конвейера запинены. cloud-init в CI — пакет архива ubuntu-24.04 без пина.
 
 ### Ресурсы
 
@@ -178,7 +178,7 @@ make k8s-rollback-demo   # битый тег образа → helm --atomic от
 make k8s-rotate-demo     # ротация пароля: старый пароль и старая cookie → 401, новый → 200
 make k8s-alert-demo      # API выключается → SensorGatewayDown firing → Alertmanager → webhook alert-sink → API обратно → resolved
 make k8s-netpol-check    # NetworkPolicy: под из чужого namespace не достаёт API, web достаёт (нужен работающий контроллер политик)
-make down                # удалить кластер (и Compose-демо, если запущено)
+make down                # demo-down, если есть .env; K3D=1: ещё k3d cluster delete; K3D=0: снять релизы sensor-canary, sensor, mon, k3s не удаляет
 ```
 
 Другие режимы:
@@ -194,7 +194,7 @@ make down                # удалить кластер (и Compose-демо, �
 
 ### CI локально
 
-`make lint` и `make test` повторяют проверки CI без кластера и без push. Сборка образов, Trivy и SBOM (job `images`) в эти цели не входят.
+`make lint` и `make test` повторяют jobs `lint`, `api`, `web`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff check llm`. Не входят job `images` (сборка, Trivy образов, SBOM), job `iac` и pytest/promtool job `llm` (`make llm-test`).
 
 ```bash
 make lint
@@ -242,7 +242,7 @@ make test
   `K3D_PRELOAD=1` (из подов нет egress), `INGRESS_SERVICE_TYPE=NodePort` (не работает hostPort) и host-gw вместо vxlan —
   на обычной Ubuntu они не нужны. В песочнице нет и ipset, поэтому контроллер NetworkPolicy k3s там не стартует
   и `make k8s-netpol-check` честно падает; на GitHub-раннере (обычный kernel) проверка проходит.
-- **ВМ libvirt.** Job `iac` (Terraform 1.9.8, провайдер 0.8.3 из lock-файла, `fmt -check`, `init -backend=false`, `validate`, `cloud-init schema` для примера и network-config; cloud-init 26.1) зелёный на GitHub (pull request #3) и локально. `user-data.yaml.tftpl` схема не принимает: это шаблон `templatefile`. Живой `terraform apply` на box 2026-10-17 доведён при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false` (лог `docs/iac-apply-log.md`): загрузка, cloud-init `status: done`, netplan, клон. Не запускались значения по умолчанию (8 ГиБ / 4 vCPU) и `make up K3D=0` внутри этой ВМ; нативный `make up K3D=0` по-прежнему только e2e. До успешного прогона экземпляр box пересоздали (оператор связывает это с нехваткой памяти). Повторный apply после возврата k3d не делался.
+- **ВМ libvirt.** Job `iac` зелёный на GitHub (pull request #3, run 39006928822, коммит `82bbe4f`) и локально: Terraform 1.9.8, провайдер 0.8.3 из lock-файла, `fmt -check`, `init -backend=false`, `validate` (без демона libvirt), `cloud-init schema` для `user-data.example.yaml` и `network-config.yaml`. `user-data.yaml.tftpl` схема не принимает: директивы `templatefile` ломают YAML. Живой `terraform apply` на box 2026-10-17 доведён при `vm_memory_mib=2048`, `vm_vcpu=2`, `run_make_up=false` (лог `docs/iac-apply-log.md`): загрузка, cloud-init `status: done`, netplan, клон, `vm_ip` совпал с DHCP, затем `terraform destroy`. Не запускались значения по умолчанию (8 ГиБ / 4 vCPU, `run_make_up=true`) и `make up K3D=0` внутри этой ВМ; нативный `make up K3D=0` по-прежнему только e2e. До успешного прогона экземпляр box пересоздали (оператор связывает это с нехваткой памяти). Повторный apply после возврата k3d не делался.
 - Доставка алертов: webhook в кластерный `alert-sink` (пишет тело в лог). Почта и мессенджеры не настраивались.
 - Видео: не записано в репозитории, его снимает команда (требования выше).
 
@@ -303,23 +303,9 @@ make test
 
 ## Использование LLM
 
-В работе службы sensor-gateway языковой модели нет. LLM используется (1) при разработке — внешний Grok CLI, ниже;
-(2) в конвейере как опциональный локальный помощник SRE — раздел «Локальная LLM в конвейере».
-
-- **Инструмент:** Grok CLI v1.0.52, модель `grok-4.7-build-fast`. Две волны параллельных сессий (5 + 4), у каждой свои
-  каталоги, git-команды сессиям запрещены. Ревью, интеграция, прогоны в k3d и коммиты — человек.
-- **Промпты** дословно — `docs/llm/prompts.md`.
-- **Экономия:** по субъективной оценке на первую волну (5 потоков) около 7 ч ручной работы против ~1.5 ч
-  (таблица в `docs/llm/prompts.md`). Хронометраж не вёлся. Последующие волны (аудиты, доработки) не оценивались.
-- **Ошибки, найденные проверкой** (в коде, сгенерированном моделью и прошедшем ревью): canary Ingress без `canary-by-header`, окно `rate[1m]` при scrape 30 с,
-  smoke не принимал формат подписанной cookie, Ansible в обход SOPS, секрет применялся без перезапуска подов.
-  Все найдены реальными прогонами в кластере, а не чтением кода, — поэтому все критичные пути имеют логи в `docs/`.
-- **Риски внешнего API:** в промпты уходил только код этого репозитория, без секретов и ключей (пароль стенда —
-  демонстрационный). Сборка, CI и запуск от LLM не зависят: если API недоступен, ничего не ломается.
-- **Как проверить без ключа LLM:** ключ не нужен вообще — все проверки воспроизводятся командами из раздела «Как запустить»,
-  CI и логами в `docs/`.
-- **Понимание кода командой:** каждый сгенерированный файл прошёл ревью; что делает каждый скрипт, описано в README и
-  в шапках скриптов; исправления выше сделаны вручную после разбора причин.
+В работе службы sensor-gateway языковой модели нет. LLM — опциональный локальный помощник SRE в конвейере:
+малая GGUF-модель на llama.cpp пишет черновик PrometheusRule по одной фразе и объясняет провал canary. Внешних API и ключей нет,
+`make up` / `make k8s-up` и CI от модели не зависят. Её системные промпты — `llm/prompts/*.txt`, журнал запусков — `llm/out/runs.jsonl`.
 
 ### Локальная LLM в конвейере (опционально)
 
@@ -330,12 +316,13 @@ make test
   файл `Ternary-Bonsai-2-4B-Q2_0.gguf` (тернарные веса), **1.21 ГБ**, лицензия **Apache-2.0**, без gated-доступа и токена.
   sha256 `64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4` (проверяется скриптом).
 - **Почему она:** из 7 замеренных моделей (Bonsai 1.7B/4B/8B 1-бит, Ternary-Bonsai-2 2B/4B, Qwen2.5-Coder 0.5B/1.5B)
-  единственная дала 3/3 правила, прошедших YAML + promtool с первой попытки, и объяснение отката без фактических ошибок.
-  Таблица замеров — `docs/llm/model-choice.md`.
+  оставлена моделью по умолчанию: Apache-2.0, без токена, файл 1.21 ГБ, upstream llama.cpp. Ток/с и память в
+  `docs/llm/model-choice.md` — прежний замер `-t 6`, в повтор 2026-10-17 не входили. Этот повтор (`make llm-up` по умолчанию, `-t 4`):
+  три фразы из того файла, с первой попытки valid одна из трёх (5xx, 16.88 с). Задержка 51.11 с, attempts 2, valid false.
+  Память 104.27 с, valid со второй попытки. `make llm-explain` — 66.67 с, attempts 1, valid. Журнал обоих прогонов — `docs/llm/examples/runs.jsonl`.
 - **Рантайм:** официальный `ghcr.io/ggml-org/llama.cpp:server-b11681` (upstream, форк PrismML не нужен), OpenAI-совместимый
   API на `127.0.0.1:8090`, только CPU (AVX2), лимит контейнера 2 ГБ.
-- **Ресурсы:** пиковый RSS 1.66 ГБ (0.47 ГБ анонимной + 1.19 ГБ отображённых весов), 14.5 ток/с генерации (замер на 6 потоках, `LLM_THREADS=6`; по умолчанию `scripts/llm-up.sh` берёт `-t 4`);
-  правило 16–26 с, объяснение ~50 с. Для 8 ГБ машин: `LLM_NAME=ternary-bonsai-2-2b` (0.55 ГБ, ~0.7 ГиБ, 38 ток/с, слабее).
+- **Ресурсы:** пиковый RSS 1.66 ГБ (0.47 ГБ анонимной + 1.19 ГБ отображённых весов) и 14.5 ток/с — прежний замер на 6 потоках (`LLM_THREADS=6`), в повторе 2026-10-17 не снимались. По умолчанию `scripts/llm-up.sh` берёт `-t 4`. Времена повтора — выше и в `docs/llm/model-choice.md`. Для 8 ГБ машин: `LLM_NAME=ternary-bonsai-2-2b` (0.55 ГБ, ~0.7 ГиБ, 38 ток/с, слабее; в этот день не перезапускалась).
 
 ```bash
 make llm-up                       # скачать веса с HF (sha256) в llm/models/ и запустить llama-server
@@ -347,7 +334,7 @@ make llm-down
 ```
 
 Что проверяется в `llm-gen` (`llm/llm_gen.py`): YAML; `apiVersion/kind`; DNS-1123 имя; `release: mon` (иначе
-kube-prometheus-stack не подхватит); CamelCase имя алерта; `for`; `severity` warning|critical; summary/description;
+kube-prometheus-stack не подхватит); CamelCase имя алерта; если есть `for` — формат duration (отсутствие `for` не ошибка); `severity` warning|critical; summary/description;
 `promtool check rules` (образ `prom/prometheus:v2.54.1`); `rate()`/`increase()` по gauge и regex в `=`-матчере.
 При ошибке — один раунд: ошибки валидатора уходят модели, результат проверяется снова; если не прошёл — код выхода 1.
 В `llm-explain` — две проверки: ответ на русском (доля кириллицы ≥ 0.5, иначе один повтор с просьбой перевести;
@@ -365,23 +352,27 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; `
 Каждый запуск пишет в `llm/out/runs.jsonl`: модель, seed 42, temperature 0, файл системного промпта, полный пользовательский запрос (поле `user`; для explain — с хвостом лога), время, токены,
 результат валидации. Промпты — `llm/prompts/*.txt`.
 
-Реальный вывод `make llm-explain` (56 с, проверки пройдены):
+Реальный вывод `make llm-explain` повтора 2026-10-17 (66.67 с, attempts 1, проверки пройдены):
 
 ```text
 - Что упало: проверка smoke `login` вернула HTTP 401 вместо 200 и отсутствовал сессионный токен `dts_session`.
 - Что сделал конвейер: вес canary выставлен в 0, релиз sensor-canary удалён через helm uninstall.
 - Затронут ли stable: нет — smoke stable прошёл успешно (HTTP 200, cookie dts_session).
+- Вероятная причина: canary не готов к работе из-за отсутствия валидного секрета (использовался `sensor-secrets-wrong`).
+- Что проверить дальше: `kubectl -n sensor describe secret sensor-secrets-wrong`, проверить логи контейнера api.
 ```
 
-Реальный вывод (`make llm-gen`, 15.7 с, 145 токенов, `VALIDATION OK`):
+Реальный вывод повтора (`make llm-gen`, память, 104.27 с, 152 токена, attempts 2, `VALIDATION OK`):
 
 ```yaml
         - alert: SensorGatewayMemoryCritical
-          expr: process_resident_memory_bytes > 400000000
+          expr: process_resident_memory_bytes{namespace="sensor"} > 400000000
           for: 10m
           labels:
             severity: critical
 ```
+
+Метрика `process_resident_memory_bytes` сервис не отдаёт (в `services/api/app/main.py` нет `prometheus_client` и process collector); пример проверяет только синтаксис PromQL.
 
 Полные примеры и журнал прогонов: `docs/llm/examples/`. Тот же прогон показал и ошибку модели: для задержки она
 написала `sum(service_probe_latency_seconds{...}[2m])` — promtool отверг, исправление тоже не прошло, `make llm-gen`
@@ -390,7 +381,7 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; `
 Без ключа и без интернета: после `make llm-up` (единственный выход в сеть — скачивание весов и образов) всё работает
 офлайн, ключи не нужны. **Риски:** малая модель ошибается в смысле PromQL (валидные, но не те выражения) — поэтому
 правило — черновик для ревью, а не автодеплой; объяснение может перепутать
-детали — это подсказка, откат от неё не зависит; генерация занимает до минуты.
+детали — это подсказка, откат от неё не зависит. Повтор 2026-10-17: правила 16.88 с, 51.11 с и 104.27 с, объяснение 66.67 с.
 
 ## Troubleshooting
 

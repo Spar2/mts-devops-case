@@ -30,10 +30,13 @@ MODEL = os.environ.get("LLM_MODEL", "qwen2.5-coder-1.5b-instruct-q4_k_m")
 LOG = os.environ.get("LLM_LOG", os.path.join(ROOT, "llm", "out", "runs.jsonl"))
 PROMTOOL_IMAGE = os.environ.get("PROMTOOL_IMAGE", "prom/prometheus:v2.54.1")
 SEED = 42
-KNOWN_METRICS = "up, service_probe_latency_seconds, http_requests_total{status,path}, process_resident_memory_bytes"
+# /metrics is written in main.py, not by prometheus_client: no process collector
+# and no status/path labels. `up` is the Prometheus scrape result.
+KNOWN_METRICS = "up, service_up, service_probe_latency_seconds, http_requests_total"
 DURATION = re.compile(r"^\d+(ms|s|m|h|d)$")
 ALERT = re.compile(r"^[A-Z][A-Za-z0-9]+$")
-GAUGES = ("service_probe_latency_seconds", "process_resident_memory_bytes", "up")
+# process_resident_memory_bytes is not exported; rate() on it still fails if a task names it.
+GAUGES = ("service_up", "service_probe_latency_seconds", "process_resident_memory_bytes", "up")
 COUNTER_FUNC = re.compile(r"\b(rate|irate|increase)\s*\(\s*(\w+)")
 EQ_REGEX = re.compile(r'\b\w+\s*=\s*"[^"]*(\.\*|\.\+|\[|\|)[^"]*"')
 NAME = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")

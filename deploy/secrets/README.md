@@ -9,12 +9,12 @@ Secret `sensor-secrets` (ns `sensor`) содержит `DEMO_PASSWORD` и `SESSI
 | --- | --- | --- |
 | `~/.config/sops/age/keys.txt` | нет | приватный ключ age этой машины (права 600) |
 | `deploy/secrets/sops.local.yaml` | нет | конфиг SOPS с публичным ключом стенда, генерирует `secrets-init.sh` |
-| `deploy/secrets/sensor-secrets.enc.yaml` | нет на стенде жюри | Secret, зашифрованы только `data`/`stringData` |
+| `deploy/secrets/sensor-secrets.enc.yaml` | нет | Secret, зашифрованы только `data`/`stringData`; `make up` создаёт файл локально |
 | `scripts/secrets-*.sh` | да | init / apply / rotate / rotate-check |
 
-Почему зашифрованный файл не в git: у каждого стенда свой ключ age, файл, зашифрованный на ключ
-команды, жюри не расшифрует. В рабочей среде команда коммитит `sensor-secrets.enc.yaml`
-(метаданные получателей хранятся в самом файле), а `keys.txt` раздаётся вне git.
+Почему зашифрованный файл не в git: `*.enc.yaml` в `.gitignore`, у каждого стенда свой ключ age.
+`make up` создаёт `deploy/secrets/sensor-secrets.enc.yaml` и `grafana-admin.enc.yaml` локально.
+Приватный ключ `keys.txt` остаётся вне git.
 
 ## Команды
 

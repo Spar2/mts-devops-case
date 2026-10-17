@@ -43,7 +43,7 @@ PASS POST /api/v1/service/probe 200
 2026-10-16T22:57:17Z PASS canary-fail-demo: stable release sensor still serves traffic
 ```
 
-## 2. Успешный canary 10 → 50 → 100 с метрическим гейтом и promote (`scripts/canary.sh s2`)
+## 2. Устаревший прогон: гейт по http_requests_total, до перевода на ingress-nginx
 
 ```text
 2026-10-16T22:58:43Z canary s2 weights: 10 50 100
@@ -101,7 +101,7 @@ Cookie получена на stable (`X-Canary: never`), запрос с ней 
 
 Первая выкладка образа с подписанными сессиями: smoke не принял новый формат cookie → `helm rollback sensor 0`, stable остался на прежней ревизии. После исправления smoke выкладка прошла.
 
-## Повторный прогон после перевода гейта на ingress-nginx (box, k3d, коммит 6afb9a3, 2026-10-17, время UTC)
+## Повторный прогон: гейт ingress-nginx на коммите 6afb9a3 (PromQL совпадает с текущим `scripts/canary.sh`; строки «prometheus sees …» текущий скрипт уже не печатает)
 
 Стенд поднят `make up` в клоне `/tmp/fresh` (k3d-кластер на тот момент уже существовал, скрипт идемпотентен). Ниже шаги, PromQL и итог без строк Helm NOTES.
 
