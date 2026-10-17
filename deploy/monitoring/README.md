@@ -12,16 +12,22 @@ Grafana: http://grafana.localtest.me:8081 в режиме k3d, :80 при `K3D=0
 
 ## Зачем эти метрики
 
-API пишет текст Prometheus на `GET /metrics`.
+API пишет текст Prometheus на `GET /metrics` библиотекой `prometheus_client` 0.26.0. Снаружи путь закрывает nginx web (403). Ingress направляет запрос на Service web и сам путь не режет. ServiceMonitor скрейпит Service API напрямую.
 
-- `service_up` — gauge процесса, на дашборде stat. Пока обработчик `/metrics` жив, значение 1.
-- `rate(http_requests_total[1m])` — запросы в секунду. Счётчик растёт на каждом HTTP-запросе, включая сам scrape `/metrics`.
-- `service_probe_latency_seconds` — задержка последнего `POST /api/v1/service/probe` из окна «Служба».
+- `http_request_duration_seconds` — гистограмма задержки HTTP. Метки `method`, `path` (шаблон маршрута; несовпавший путь — `unmatched`), `status`.
+- `http_requests_total` — счётчик запросов с теми же метками, включая scrape `/metrics`. На дашборде `sum by (service) (rate(...[2m]))`.
+- `service_up` — 1, если проверка готовности проходит (ключ сессии подписывает и проверяет токен), иначе 0. Тот же результат у `GET /ready` (503, если проверка не прошла).
+- `service_probe_latency_seconds` — измеренное время последнего `POST /api/v1/service/probe`, без фиксированной паузы.
+- `process_resident_memory_bytes` и остальные `process_*` / `python_*` — коллекторы реестра по умолчанию.
 - `up{job=~".*sensor.*api.*"}` — жив ли scrape Service API. Job выглядит как `sensor/sensor-api` и, если выкатана канарейка, `sensor/sensor-canary-api`.
 
-Алерт **SensorGatewayDown** (critical, 1 минута) считает `(sum(up{namespace="sensor", service=~".*-api"}) or vector(0)) == 0`. При `scale --replicas=0` ряд `service_up` исчезает вместе с подом, и сравнение `max(service_up) < 1` не получает точку. `or vector(0)` превращает «рядов нет» в ноль, и алерт зажигается. Пока жив хотя бы один Service `*-api`, сумма больше нуля.
+Алерт **SensorGatewayDown** (critical, 1 минута) считает `(sum(up{namespace="sensor", service=~".*-api"}) or vector(0)) == 0`. При `scale --replicas=0` ряд приложения исчезает вместе с подом, и сравнение `service_up < 1` не получает точку. `or vector(0)` превращает «рядов нет» в ноль, и алерт зажигается. Пока жив хотя бы один Service `*-api`, сумма больше нуля.
+
+Алерт **SensorGatewayHighLatency** (warning, 2 минуты) считает `histogram_quantile(0.95, sum by (le, service) (rate(http_request_duration_seconds_bucket{namespace="sensor"}[5m]))) > 0.5`. Это p95 гистограммы HTTP, не gauge probe. Пока трафика нет, `rate` пустой и условие ложно; при p95 выше 0.5 с алерт зажигается. На дашборде та же формула, порог 0.5 с.
 
 Алерты **SensorGatewayNoReplicas** (critical: у Deployment в namespace sensor spec.replicas>0, а доступных реплик 0 минуту, kube-state-metrics) и **SensorGatewayPodRestarts** (warning: больше 3 рестартов контейнера за 15 минут).
+
+`make k8s-alert-demo` по-прежнему гасит `deployment/sensor-api` и проверяет доставку **SensorGatewayDown**. `SensorGatewayHighLatency` попадает в тот же маршрут `alertname =~ "SensorGateway.*"`, отдельно на кластере не поджигался.
 
 ## Доставка
 

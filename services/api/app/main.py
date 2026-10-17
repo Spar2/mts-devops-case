@@ -1,7 +1,7 @@
-import asyncio
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import math
 import os
@@ -11,17 +11,42 @@ import time
 from collections import defaultdict, deque
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from pydantic import BaseModel
 
 _LOGIN_LIMIT = 30
 _LOGIN_WINDOW_S = 60.0
-_PROBE_SLEEP_S = 0.01
+_SESSION_COOKIE = "sensor_session"
 _B64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+# k3s defaults: pod CIDR 10.42.0.0/16, service CIDR 10.43.0.0/16.
+# Web pods live in the pod CIDR, so they are the trusted hop in front of the API.
+_DEFAULT_TRUSTED_PROXY_CIDRS = "10.42.0.0/16,10.43.0.0/16"
+_Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 # Image tag, same token deploy.sh and canary.sh accept. Anything else falls back
 # so a bad env value cannot break the header.
 _APP_VERSION_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 _APP_VERSION_DEFAULT = "0.1.0"
+
+# Default registry also exports process_* and python_*.
+HTTP_REQUESTS = Counter(
+    "http_requests_total",
+    "HTTP requests.",
+    ("method", "path", "status"),
+)
+HTTP_DURATION = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request latency in seconds.",
+    ("method", "path", "status"),
+)
+SERVICE_UP = Gauge(
+    "service_up",
+    "1 when the readiness check passes, otherwise 0.",
+)
+PROBE_LATENCY = Gauge(
+    "service_probe_latency_seconds",
+    "Latency of the most recent service probe in seconds.",
+)
 
 
 class LoginBody(BaseModel):
@@ -38,12 +63,14 @@ class _Settings:
         session_ttl_s: int,
         secure_cookies: bool,
         signing_key: bytes,
+        trusted_proxies: tuple[_Network, ...],
     ) -> None:
         self.username = username
         self.display_name = display_name
         self.session_ttl_s = session_ttl_s
         self.secure_cookies = secure_cookies
         self.signing_key = signing_key
+        self.trusted_proxies = trusted_proxies
         self._password = password
 
     def username_ok(self, offered: str) -> bool:
@@ -51,9 +78,6 @@ class _Settings:
 
     def password_ok(self, offered: str) -> bool:
         return _equals(offered, self._password)
-
-    def __repr__(self) -> str:
-        return f"_Settings(username={self.username!r})"
 
 
 class _Session:
@@ -99,6 +123,70 @@ def _signing_key(session_secret: str, password: str) -> bytes:
     return hashlib.sha256(material).digest()
 
 
+def _trusted_networks(raw: str | None) -> tuple[_Network, ...]:
+    if raw is None or not raw.strip():
+        raw = _DEFAULT_TRUSTED_PROXY_CIDRS
+    networks: list[_Network] = []
+    for part in raw.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError as exc:
+            raise RuntimeError(f"TRUSTED_PROXY_CIDRS has an invalid network: {item}") from exc
+    if not networks:
+        raise RuntimeError("TRUSTED_PROXY_CIDRS must list at least one network")
+    return tuple(networks)
+
+
+def _parse_ip(text: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(text.strip())
+    except ValueError:
+        return None
+
+
+def _in_trusted(
+    addr: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    networks: tuple[_Network, ...],
+) -> bool:
+    return any(addr in network for network in networks)
+
+
+def _client_from_forwarded(header: str, networks: tuple[_Network, ...]) -> str | None:
+    # Rightmost address is the one appended by the nearest proxy. Skip hops that
+    # are themselves trusted proxies; the first address outside that set is the client.
+    addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for part in header.split(","):
+        addr = _parse_ip(part)
+        if addr is not None:
+            addresses.append(addr)
+    if not addresses:
+        return None
+    for addr in reversed(addresses):
+        if not _in_trusted(addr, networks):
+            return str(addr)
+    return str(addresses[0])
+
+
+def _client_address(request: Request, networks: tuple[_Network, ...]) -> str:
+    # Headers count only when the TCP peer is a trusted proxy. Then X-Real-IP
+    # is that proxy's client. Otherwise the rightmost untrusted X-Forwarded-For
+    # hop is the client. A forged header from an untrusted peer is ignored.
+    peer = request.client.host if request.client and request.client.host else "unknown"
+    peer_addr = _parse_ip(peer)
+    if peer_addr is None or not _in_trusted(peer_addr, networks):
+        return peer
+    real = _parse_ip(request.headers.get("x-real-ip", ""))
+    if real is not None:
+        return str(real)
+    forwarded = _client_from_forwarded(request.headers.get("x-forwarded-for", ""), networks)
+    if forwarded is not None:
+        return forwarded
+    return peer
+
+
 def _settings_from_env() -> _Settings:
     raw_password = os.environ.get("DEMO_PASSWORD")
     if raw_password is None or len(raw_password) < 12:
@@ -122,6 +210,7 @@ def _settings_from_env() -> _Settings:
         session_ttl_s,
         secure_cookies,
         _signing_key(session_secret, raw_password),
+        _trusted_networks(os.environ.get("TRUSTED_PROXY_CIDRS")),
     )
 
 
@@ -178,8 +267,60 @@ def _synthetic_reading(now: float) -> dict[str, float | str]:
     }
 
 
+def _readiness_ok(settings: _Settings) -> bool:
+    # The process has no remote dependency. Readiness is the session key:
+    # it must be present and able to issue a token that verifies.
+    if not settings.username or len(settings.signing_key) != 32:
+        return False
+    try:
+        token = _issue_token(settings.username, 60, settings.signing_key)
+        return _username_from_token(token, settings.signing_key) == settings.username
+    except HTTPException:
+        return False
+
+
+def _route_path(scope: dict) -> str:
+    # Route template, not the raw URL, so a 404 cannot grow the label set.
+    route = scope.get("route")
+    path = getattr(route, "path", None)
+    if isinstance(path, str) and path:
+        return path
+    return "unmatched"
+
+
+class _ObserveHttp:
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        method = scope.get("method", "GET")
+        status = 500
+        started = time.perf_counter()
+
+        async def send_wrapper(message):
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = int(message["status"])
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            elapsed = time.perf_counter() - started
+            labels = {
+                "method": method,
+                "path": _route_path(scope),
+                "status": str(status),
+            }
+            HTTP_REQUESTS.labels(**labels).inc()
+            HTTP_DURATION.labels(**labels).observe(elapsed)
+
+
 def _session(request: Request) -> _Session:
-    token = request.cookies.get("dts_session")
+    token = request.cookies.get(_SESSION_COOKIE)
     if not token:
         raise _unauthorized()
     settings: _Settings = request.app.state.settings
@@ -199,26 +340,9 @@ def _login_limited(state, host: str) -> bool:
     return False
 
 
-def _metrics_text(state) -> str:
-    return "\n".join(
-        [
-            "# HELP service_up Whether the service process is up.",
-            "# TYPE service_up gauge",
-            "service_up 1",
-            "# HELP http_requests_total Total HTTP requests.",
-            "# TYPE http_requests_total counter",
-            f"http_requests_total {state.http_requests_total}",
-            "# HELP service_probe_latency_seconds Latency of the most recent probe in seconds.",
-            "# TYPE service_probe_latency_seconds gauge",
-            f"service_probe_latency_seconds {state.probe_latency_seconds:.6f}",
-            "",
-        ]
-    )
-
-
 def _apply_session_cookie(response: JSONResponse, token: str, settings: _Settings) -> None:
     response.set_cookie(
-        key="dts_session",
+        key=_SESSION_COOKIE,
         value=token,
         httponly=True,
         samesite="strict",
@@ -230,7 +354,7 @@ def _apply_session_cookie(response: JSONResponse, token: str, settings: _Setting
 
 def _clear_session_cookie(response: JSONResponse, settings: _Settings) -> None:
     response.delete_cookie(
-        key="dts_session",
+        key=_SESSION_COOKIE,
         path="/",
         httponly=True,
         samesite="strict",
@@ -238,46 +362,49 @@ def _clear_session_cookie(response: JSONResponse, settings: _Settings) -> None:
     )
 
 
+def _mark_readiness(settings: _Settings) -> bool:
+    ok = _readiness_ok(settings)
+    SERVICE_UP.set(1 if ok else 0)
+    return ok
+
+
 def create_app() -> FastAPI:
     settings = _settings_from_env()
     app = FastAPI(title="sensor-gateway", version="0.1.0")
     app.state.settings = settings
     app.state.started_at = time.monotonic()
-    app.state.http_requests_total = 0
     app.state.service_requests = 0
-    app.state.probe_count = 0
     app.state.last_probe_ms = None
-    app.state.probe_latency_seconds = 0.0
     app.state.login_attempts = defaultdict(deque)
-
-    @app.middleware("http")
-    async def count_requests(request: Request, call_next):
-        request.app.state.http_requests_total += 1
-        return await call_next(request)
+    app.add_middleware(_ObserveHttp)
+    _mark_readiness(settings)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/ready")
-    async def ready() -> JSONResponse:
+    async def ready(request: Request) -> JSONResponse:
         # APP_VERSION is the image tag (chart env). Smoke and the canary weight
         # sample use it to tell this pod from the other release.
+        if not _mark_readiness(request.app.state.settings):
+            raise HTTPException(status_code=503, detail="not ready")
         version = _app_version()
         response = JSONResponse({"status": "ok", "version": version})
         response.headers["X-App-Version"] = version
         return response
 
     @app.get("/metrics")
-    async def metrics(request: Request) -> PlainTextResponse:
-        return PlainTextResponse(_metrics_text(request.app.state), media_type="text/plain")
+    async def metrics(request: Request) -> Response:
+        _mark_readiness(request.app.state.settings)
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.post("/api/v1/auth/login")
     async def login(body: LoginBody, request: Request) -> JSONResponse:
-        host = request.client.host if request.client else "unknown"
+        current: _Settings = request.app.state.settings
+        host = _client_address(request, current.trusted_proxies)
         if _login_limited(request.app.state, host):
             raise HTTPException(status_code=429, detail="Too many login attempts")
-        current = request.app.state.settings
         if not (current.username_ok(body.username) and current.password_ok(body.password)):
             raise HTTPException(status_code=401, detail="Incorrect username or password")
         token = _issue_token(current.username, current.session_ttl_s, current.signing_key)
@@ -289,7 +416,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/v1/auth/logout")
     async def logout(request: Request) -> JSONResponse:
-        """Clear the dts_session cookie.
+        """Clear the sensor_session cookie.
 
         The token is stateless. A copy stays valid until exp or until
         DEMO_PASSWORD rotation changes the signing key.
@@ -327,13 +454,12 @@ def create_app() -> FastAPI:
     async def service_probe(request: Request) -> dict[str, bool | float]:
         _session(request)
         started = time.perf_counter()
-        await asyncio.sleep(_PROBE_SLEEP_S)
-        latency_ms = (time.perf_counter() - started) * 1000.0
+        reading = _synthetic_reading(time.time())
+        elapsed = time.perf_counter() - started
         state = request.app.state
-        state.probe_count += 1
-        state.last_probe_ms = latency_ms
-        state.probe_latency_seconds = latency_ms / 1000.0
-        return {"ok": True, "latency_ms": latency_ms}
+        state.last_probe_ms = elapsed * 1000.0
+        PROBE_LATENCY.set(elapsed)
+        return {"ok": reading["quality"] == "valid", "latency_ms": state.last_probe_ms}
 
     return app
 

@@ -40,3 +40,11 @@ spec:
           annotations:
             summary: "sensor-gateway: больше 5% ответов 5xx через ingress"
             description: "Доля 5xx среди запросов к ingress namespace sensor (stable и canary) больше 5% уже 5 минут (метрики ingress-nginx)."
+        - alert: SensorGatewayHighLatency
+          expr: histogram_quantile(0.95, sum by (le, service) (rate(http_request_duration_seconds_bucket{namespace="sensor"}[5m]))) > 0.5
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "sensor-gateway: высокая задержка HTTP ({{ $labels.service }})"
+            description: "p95 гистограммы http_request_duration_seconds у Service {{ $labels.service }} больше 0.5 с уже 2 минуты. Пока запросов нет, rate пустой и алерт не зажигается."

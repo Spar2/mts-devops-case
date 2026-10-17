@@ -2,6 +2,8 @@
 
 Стенд: k3d, ingress-nginx 4.11.3, kube-prometheus-stack 65.1.1, Prometheus через port-forward (`PROM_URL=http://127.0.0.1:9090`), ingress через port-forward (`INGRESS_PORT=18081`).
 
+В выдержках smoke этого файла cookie ещё `dts_session`, а `/metrics` открыт через ingress. Сейчас cookie — `sensor_session`; снаружи путь закрывает nginx web (403 или 404), тело метрик smoke читает из пода API.
+
 ## 1. Провал canary → автоматический откат (`scripts/canary-fail-demo.sh s2`)
 
 Canary запускается с неверным секретом: поды готовы, но smoke-вход не проходит.
@@ -103,7 +105,7 @@ Cookie получена на stable (`X-Canary: never`), запрос с ней 
 
 ## Повторный прогон: гейт ingress-nginx на коммите 6afb9a3
 
-Это прежний скрипт. Три PromQL (`up`, rate и доля 5xx по `nginx_ingress_controller_requests`) в `scripts/canary.sh` сохранились. В том прогоне не было отдельного тега canary, проверки `X-App-Version`, выборки веса, отказа на NaN/Inf и паузы на весе 0 перед uninstall: promote сразу снимал canary. Строки «prometheus sees …» текущий скрипт не печатает. Живого прогона текущего гейта в репозитории нет.
+Это прежний скрипт. В том прогоне не было отдельного тега canary, проверки `X-App-Version`, выборки веса, отказа на NaN/Inf и паузы на весе 0 перед uninstall: promote сразу снимал canary. Текущий скрипт оставил PromQL `up` и rate по `nginx_ingress_controller_requests`. Долю 5xx он считает по кодам выборки без заголовка (`/ready`, `/`, `/api/v1/service`), не по rate() canary-ряда и не по 10 запросам `X-Canary` на `/ready`. Строки «prometheus sees …» текущий скрипт не печатает. Отдельный тег и выборка веса на k3d в box 2026-10-17 дали долю canary 10% / 49% / 100% при весах 10/50/100, canary-fail откатил canary; полного лога этого прогона в репозитории нет.
 
 Стенд поднят `make up` в клоне `/tmp/fresh` (k3d-кластер на тот момент уже существовал, скрипт идемпотентен). Ниже шаги, PromQL и итог без строк Helm NOTES.
 

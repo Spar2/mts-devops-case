@@ -10,6 +10,8 @@ K3D=1 K3D_PRELOAD=1 INGRESS_SERVICE_TYPE=NodePort INGRESS_PORT=18081 \
 
 Перед прогоном: удалены кластер, ключ age и зашифрованный секрет (чистый старт). Admission webhook ingress-nginx включён, скрипт дождался его готовности.
 
+Строки smoke ниже — запись этого прогона. Cookie тогда называлась `dts_session`, тело `/metrics` читалось через ingress. Сейчас cookie — `sensor_session`; снаружи `/metrics` отвечает 403 от nginx web (или 404), тело smoke читает через `kubectl exec` в под API.
+
 ```text
 #12 [build 6/8] COPY public ./public
 #12 CACHED

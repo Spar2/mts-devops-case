@@ -37,6 +37,8 @@ PROMTOOL_IMAGE = os.environ.get("PROMTOOL_IMAGE", "prom/prometheus:v2.54.1")
 SEED = 42
 DURATION = re.compile(r"^\d+(ms|s|m|h|d)$")
 ALERT = re.compile(r"^[A-Z][A-Za-z0-9]+$")
+# rate()/irate()/increase() on a gauge is rejected from the whitelist type.
+# process_* is exported by the default registry and is not on the whitelist.
 COUNTER_FUNC = re.compile(r"\b(rate|irate|increase)\s*\(\s*(\w+)")
 EQ_REGEX = re.compile(r'\b\w+\s*=\s*"[^"]*(\.\*|\.\+|\[|\|)[^"]*"')
 NAME = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
