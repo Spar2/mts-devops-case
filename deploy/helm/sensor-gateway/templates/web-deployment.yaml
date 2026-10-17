@@ -34,6 +34,11 @@ spec:
       # nginx:1.29-alpine master stays root: it binds port 80 and setuid's workers.
       # Do not set runAsNonRoot. /var/run is a symlink to /run (pid /run/nginx.pid);
       # the emptyDir is mounted on that target.
+      # Pod securityContext is explicit (seccomp only) so the pod does not run
+      # with an empty default context. runAsNonRoot here would block the master.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: web
           image: "{{ .Values.image.web.repository }}:{{ .Values.image.web.tag }}"
