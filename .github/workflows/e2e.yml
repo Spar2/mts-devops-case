@@ -7,11 +7,20 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   workflow_dispatch:
 
+# github.ref: refs/heads/main (push и workflow_dispatch) или refs/pull/N/merge (pull_request).
+# Устаревший прогон того же PR отменяется. Прогон main не прерывается: при новом push он
+# остаётся в очереди той же группы, пока текущий не закончится.
 concurrency:
   group: e2e-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e:
@@ -22,18 +31,16 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
+      # pull_request — только k3d (путь жюри: k3s в Docker, ingress :8081).
+      # push в main и workflow_dispatch — ещё и нативный k3s на Ubuntu 24.04, ingress :80.
+      # include целиком из fromJSON: exclude не снимает строки, добавленные через include.
       matrix:
-        include:
-          # Путь жюри по умолчанию: k3d (k3s в Docker), ingress на :8081.
-          - mode: k3d
-            k3d: "1"
-            ingress_port: "8081"
-            kubeconfig: /home/runner/.kube/config
-          # Нативный k3s на хосте Ubuntu 24.04 (как на ВМ / OpenStack-инстансе), ingress на :80.
-          - mode: k3s
-            k3d: "0"
-            ingress_port: "80"
-            kubeconfig: /home/runner/.kube/config
+        include: >-
+          ${{ fromJSON(
+            github.event_name == 'pull_request'
+            && '[{"mode":"k3d","k3d":"1","ingress_port":"8081","kubeconfig":"/home/runner/.kube/config"}]'
+            || '[{"mode":"k3d","k3d":"1","ingress_port":"8081","kubeconfig":"/home/runner/.kube/config"},{"mode":"k3s","k3d":"0","ingress_port":"80","kubeconfig":"/home/runner/.kube/config"}]'
+          ) }}
     env:
       K3D: ${{ matrix.k3d }}
       INGRESS_PORT: ${{ matrix.ingress_port }}
