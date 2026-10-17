@@ -15,7 +15,9 @@
 #                       so X-Canary traffic is already in the ingress counter.
 #                       Default 20 (ingress-nginx scrape is 15s).
 #   WEIGHT_METRIC_WAIT_S  seconds to wait for that counter to move, default 60
-#   CANARY_SELF_TEST=1  check finite-number parsing and weight bounds, then exit
+#   CANARY_SELF_TEST=1  check finite numbers, weight bounds, the HTTP 200
+#                       share, the 5xx ratio (401 is not a 5xx) and rollback
+#                       error lines, then exit
 #
 # make k8s-canary passes CANARY_TAG (default <stable-sha>-canary), not TAG.
 # The chart sets APP_VERSION to the image tag. GET /ready returns it as JSON
@@ -24,24 +26,36 @@
 # Each step installs release sensor-canary (track=canary, canary.enabled=true,
 # canary.weight=W) and waits until ingress-nginx shows that weight. Then:
 #   1. scripts/smoke.sh with X_CANARY=always and EXPECT_VERSION=TAG
-#   2. WEIGHT_SAMPLE_N requests to /ready with no X-Canary header. The share of
-#      responses whose version is TAG must sit in the weight band (integer
-#      percent, hits*100/N): 10 → 2–25, 50 → 30–70, 100 → 100. Another weight
-#      w in 1..99 → max(1, w-20)..min(99, w+20). 0 → 0.
-#   3. The same band on the ingress-nginx counter delta around that sample:
-#      canary label =~ .+sensor-canary.+  over all requests in namespace sensor.
+#   2. WEIGHT_SAMPLE_N rounds with no X-Canary header and no sensor_session
+#      cookie, each round hitting /ready, / and /api/v1/service. Without a
+#      sensor_session cookie /api/v1/service
+#      is 401, and 401 is not a 5xx. The version share uses only HTTP 200
+#      /ready responses (integer percent, hits*100/http_ok): 10 → 2–25,
+#      50 → 30–70, 100 → 100. Another weight w in 1..99 →
+#      max(1, w-20)..min(99, w+20). 0 → 0. At weight 100 a /ready response
+#      that is not HTTP 200 rolls back on its own; it is not folded into the
+#      percent.
+#   3. Ingress-nginx counter delta around that same sample: canary label
+#      =~ .+sensor-canary.+ over all requests in namespace sensor. Same bands,
+#      except weight 100 is 95–100 so one stray request does not fail the step.
 #      Header traffic from the smoke is outside this delta.
 #   4. Prometheus, after 10 requests with X-Canary: always and ANALYSIS_WAIT_S:
 #        min(up{namespace="sensor",service="sensor-canary-api"}) == 1
 #          (only if the target appears within 120s)
 #        canary request rate > 0
-#        5xx share of those requests >= 0 and < 0.05
-#      NaN, +Inf, -Inf, empty and non-numeric samples roll back. mawk turns
-#      NaN and Inf into 0, so a bare `v+0 < 0.05` would accept them.
-#      Prometheus unreachable at PROM_URL also rolls the canary back.
-# A failed install or gate sets weight 0, uninstalls sensor-canary, prints
-# "ROLLBACK canary: <reason>", and does not change release sensor.
-# Success: deploy.sh moves stable to TAG and waits for rollout, canary weight
+#      Those 10 requests are not the 5xx share. The share is HTTP 5xx among
+#      the unheadered sample in step 2, divided by every HTTP status in that
+#      sample (401 stays in the denominator). It must be >= 0 and < 0.05.
+#      NaN, +Inf, -Inf, empty and non-numeric Prometheus samples roll back.
+#      mawk turns NaN and Inf into 0, so a bare numeric compare would accept
+#      them. Prometheus unreachable at PROM_URL also rolls the canary back.
+# A failed install or gate sets weight 0, uninstalls sensor-canary and prints
+# "ROLLBACK canary: <reason>". If setting weight 0 or the uninstall fails, the
+# script prints "error:" and still finishes every remaining rollback step.
+# The exit code is non-zero. Release sensor is left as it was, except when
+# promote's deploy.sh already moved stable to TAG and the rollout after that
+# did not finish: then the rollback also runs `helm rollback sensor 0`.
+# Success: deploy.sh moves stable to TAG, both rollouts finish, canary weight
 # goes to 0, ingress-nginx must show that weight, then sensor-canary is removed.
 
 set -euo pipefail
@@ -119,6 +133,58 @@ weight_bounds() {
   printf '%s %s\n' "$lo" "$hi"
 }
 
+# Ingress-counter band. Weight 100 is not exact: one request outside the
+# sample must not fail the step.
+ingress_share_bounds() {
+  local w=$1
+  if [[ "$w" == 100 ]]; then
+    printf '95 100\n'
+    return 0
+  fi
+  weight_bounds "$w"
+}
+
+# Integer percent of canary hits among HTTP 200 responses. Exit 1 when there
+# is no HTTP 200 or hits exceed that count.
+response_share_percent() {
+  local hits=$1
+  local http_ok=$2
+  if [[ ! "$hits" =~ ^[0-9]+$ || ! "$http_ok" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  if ((http_ok <= 0 || hits > http_ok)); then
+    return 1
+  fi
+  printf '%s\n' "$((hits * 100 / http_ok))"
+}
+
+# "<5xx_count> <http_count> <ratio>". 401 and any other non-5xx code are only
+# in http_count. Exit 1 on an empty list or a non-HTTP status (including 000).
+http_5xx_summary() {
+  local status five=0 total=0 ratio
+  if [[ $# -eq 0 ]]; then
+    return 1
+  fi
+  for status in "$@"; do
+    if [[ ! "$status" =~ ^[1-9][0-9][0-9]$ ]]; then
+      return 1
+    fi
+    total=$((total + 1))
+    if [[ "$status" =~ ^5[0-9][0-9]$ ]]; then
+      five=$((five + 1))
+    fi
+  done
+  ratio="$(LC_ALL=C awk -v f="$five" -v t="$total" 'BEGIN { printf "%.6f", f / t }')"
+  printf '%s %s %s\n' "$five" "$total" "$ratio"
+}
+
+# Record a rollback step that failed. Prints "error:" and returns 0 so the
+# caller can keep going. rollback_canary still exits non-zero.
+note_rollback_failure() {
+  printf 'error: %s failed\n' "$1" >&2
+  rollback_failed=1
+}
+
 counter_delta() {
   LC_ALL=C awk -v b="$1" -v a="$2" 'BEGIN { printf "%.6f", (a + 0) - (b + 0) }'
 }
@@ -155,14 +221,32 @@ chart="${ROOT}/deploy/helm/sensor-gateway"
 canary_log=""
 sample_value=""
 sample_rc=0
+# 5xx ratio of the latest unheadered weight sample. metric_gate reads these.
+sample_5xx_hits=0
+sample_5xx_total=0
+sample_5xx_ratio=""
+# 1 only after deploy.sh has moved stable to TAG and rollout is not confirmed.
+stable_needs_rollback=0
+rollback_failed=0
 
-# Drain canary traffic, delete the release, and stop. Release sensor is not
-# upgraded, rolled back, or uninstalled here.
+# Drain canary, and roll stable back when promote already moved it and the
+# rollout did not finish. Keep going after a failed step. Always exit 1.
 rollback_canary() {
   local reason=$1
-  set_canary_weight 0 || true
+  rollback_failed=0
+  if [[ "$stable_needs_rollback" == 1 ]]; then
+    step "helm rollback sensor 0 after stable rollout of ${TAG} did not finish"
+    if ! helm rollback sensor 0 -n sensor --wait --timeout 3m; then
+      note_rollback_failure "helm rollback sensor 0 -n sensor --wait --timeout 3m"
+    fi
+  fi
+  if ! set_canary_weight 0; then
+    note_rollback_failure "set canary weight 0"
+  fi
   step "helm uninstall sensor-canary"
-  helm uninstall sensor-canary -n sensor --wait --timeout 3m --ignore-not-found || true
+  if ! helm uninstall sensor-canary -n sensor --wait --timeout 3m --ignore-not-found; then
+    note_rollback_failure "helm uninstall sensor-canary -n sensor --wait --timeout 3m --ignore-not-found"
+  fi
   printf '%s ROLLBACK canary: %s\n' "$(now)" "$reason"
   if [[ -n "$canary_log" ]]; then
     "${ROOT}/scripts/llm-explain-hook.sh" "$reason" "$canary_log" || true
@@ -356,8 +440,8 @@ load_finite_sample() {
   fi
 }
 
-# Ingress sends X-Canary: always to the canary web pod. /ready is proxied to
-# the API, so these hits move the canary series of nginx_ingress_controller_requests.
+# These 10 requests only keep the canary rate query above zero. The 5xx share
+# is the unheadered weight sample, not this burst.
 generate_canary_load() {
   local i
   step "sending 10 requests to ${base_url}/ready with X-Canary: always"
@@ -369,17 +453,25 @@ generate_canary_load() {
   done
 }
 
-# Unweighted requests, then the ingress-nginx counter delta around them.
+# Unheadered requests on several paths, then the ingress counter delta.
 weight_gate() {
   local weight=$1
-  local lo hi n hits http_ok i status
-  local header_version body_version pct
+  local lo hi ilo ihi n hits http_ok i status path sent
+  local ready_non200 ready_bad transport_fail transport_path
+  local header_version body_version pct pct_rc summary summary_rc
   local q_all q_canary
   local before_all before_canary after_all after_canary
   local total_delta share_pct share_rc
   local work hdr body deadline
+  local -a sample_paths statuses
+  sample_5xx_hits=0
+  sample_5xx_total=0
+  sample_5xx_ratio=""
   read -r lo hi < <(weight_bounds "$weight")
+  read -r ilo ihi < <(ingress_share_bounds "$weight")
   n=$weight_sample_n
+  sample_paths=(/ready / /api/v1/service)
+  sent=$((n * ${#sample_paths[@]}))
   q_all='sum(nginx_ingress_controller_requests{exported_namespace="sensor"})'
   q_canary='sum(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}) or vector(0)'
 
@@ -403,32 +495,75 @@ weight_gate() {
   body="${work}/body"
   hits=0
   http_ok=0
-  step "sending ${n} requests to ${base_url}/ready without X-Canary (want ${lo}-${hi}% version ${TAG})"
+  ready_non200=0
+  ready_bad=""
+  transport_fail=0
+  transport_path=""
+  statuses=()
+  # Same series for the version share and the 5xx ratio. No X-Canary, no sensor_session cookie.
+  step "sending ${n} requests without X-Canary to /ready, / and /api/v1/service (HTTP 200 /ready share want ${lo}-${hi}% version ${TAG})"
   for ((i = 1; i <= n; i++)); do
-    status="$(
-      curl --silent --globoff --connect-timeout 3 --max-time 10 \
-        -D "$hdr" -o "$body" -w '%{http_code}' \
-        "${base_url}/ready" || true
-    )"
-    if [[ ! "$status" =~ ^[0-9]{3}$ ]]; then
-      status=000
-    fi
-    if [[ "$status" != "200" ]]; then
-      continue
-    fi
-    http_ok=$((http_ok + 1))
-    header_version="$(header_app_version "$hdr")"
-    body_version="$(body_app_version "$body")"
-    if [[ "$header_version" == "$TAG" && "$body_version" == "$TAG" ]]; then
-      hits=$((hits + 1))
-    fi
+    for path in "${sample_paths[@]}"; do
+      status="$(
+        curl --silent --globoff --connect-timeout 3 --max-time 10 \
+          -D "$hdr" -o "$body" -w '%{http_code}' \
+          "${base_url}${path}" || true
+      )"
+      if [[ ! "$status" =~ ^[0-9]{3}$ ]]; then
+        status=000
+      fi
+      statuses+=("$status")
+      if [[ "$status" == "000" ]]; then
+        transport_fail=$((transport_fail + 1))
+        if [[ -z "$transport_path" ]]; then
+          transport_path=$path
+        fi
+        continue
+      fi
+      if [[ "$path" != /ready ]]; then
+        continue
+      fi
+      if [[ "$status" != "200" ]]; then
+        ready_non200=$((ready_non200 + 1))
+        if [[ -z "$ready_bad" ]]; then
+          ready_bad=$status
+        fi
+        continue
+      fi
+      http_ok=$((http_ok + 1))
+      header_version="$(header_app_version "$hdr")"
+      body_version="$(body_app_version "$body")"
+      if [[ "$header_version" == "$TAG" && "$body_version" == "$TAG" ]]; then
+        hits=$((hits + 1))
+      fi
+    done
   done
   rm -rf -- "$work"
 
-  pct=$((hits * 100 / n))
-  step "canary version share ${hits}/${n} = ${pct}% at weight ${weight} (http 200: ${http_ok}), want ${lo}-${hi}%"
+  if ((transport_fail > 0)); then
+    rollback_canary "weight sample got ${transport_fail} responses with no HTTP status (first ${transport_path}) at weight ${weight}"
+  fi
+  # Weight 100 used to treat one non-200 as a missed hit and fail the 100% band.
+  # Count the version share on HTTP 200 only, and say why the rest failed.
+  if [[ "$weight" == 100 && "$ready_non200" -gt 0 ]]; then
+    rollback_canary "weight sample /ready got ${ready_non200}/${n} non-200 at weight 100 (first HTTP ${ready_bad}); version share counts only HTTP 200"
+  fi
+
+  summary_rc=0
+  summary="$(http_5xx_summary "${statuses[@]}")" || summary_rc=$?
+  if [[ "$summary_rc" -ne 0 ]]; then
+    rollback_canary "unheadered sample statuses are not all HTTP at weight ${weight}"
+  fi
+  read -r sample_5xx_hits sample_5xx_total sample_5xx_ratio <<<"$summary"
+
+  pct_rc=0
+  pct="$(response_share_percent "$hits" "$http_ok")" || pct_rc=$?
+  if [[ "$pct_rc" -ne 0 ]]; then
+    rollback_canary "weight sample /ready had no HTTP 200 at weight ${weight} (${ready_non200}/${n} non-200)"
+  fi
+  step "canary version share ${hits}/${http_ok} HTTP 200 = ${pct}% at weight ${weight} (non-200 /ready: ${ready_non200}), want ${lo}-${hi}%"
   if ((pct < lo || pct > hi)); then
-    rollback_canary "canary response share ${pct}% (${hits}/${n}) at weight ${weight} outside ${lo}-${hi}%"
+    rollback_canary "canary response share ${pct}% (${hits}/${http_ok} HTTP 200) at weight ${weight} outside ${lo}-${hi}%"
   fi
 
   deadline=$((SECONDS + weight_metric_wait_s))
@@ -441,11 +576,11 @@ weight_gate() {
     if awk -v d="$total_delta" 'BEGIN { exit !(d + 0 < 0) }'; then
       rollback_canary "ingress request counter went backwards (${before_all} -> ${after_all}) at weight ${weight}"
     fi
-    if awk -v d="$total_delta" -v need="$n" 'BEGIN { exit !(d + 0 >= need * 0.8) }'; then
+    if awk -v d="$total_delta" -v need="$sent" 'BEGIN { exit !(d + 0 >= need * 0.8) }'; then
       break
     fi
     if ((SECONDS >= deadline)); then
-      rollback_canary "ingress request counter rose by ${total_delta}, want at least 80% of ${n} weight-sample requests at weight ${weight}"
+      rollback_canary "ingress request counter rose by ${total_delta}, want at least 80% of ${sent} weight-sample requests at weight ${weight}"
     fi
     sleep 3
   done
@@ -455,30 +590,29 @@ weight_gate() {
   if [[ "$share_rc" -ne 0 ]]; then
     rollback_canary "ingress canary counter delta is not usable at weight ${weight} (canary ${before_canary}->${after_canary}, all ${before_all}->${after_all})"
   fi
-  step "ingress canary share ${share_pct}% at weight ${weight} (canary ${before_canary}->${after_canary}, all ${before_all}->${after_all}), want ${lo}-${hi}%"
-  if ((share_pct < lo || share_pct > hi)); then
-    rollback_canary "ingress canary share ${share_pct}% at weight ${weight} outside ${lo}-${hi}%"
+  step "ingress canary share ${share_pct}% at weight ${weight} (canary ${before_canary}->${after_canary}, all ${before_all}->${after_all}), want ${ilo}-${ihi}%"
+  if ((share_pct < ilo || share_pct > ihi)); then
+    rollback_canary "ingress canary share ${share_pct}% at weight ${weight} outside ${ilo}-${ihi}%"
   fi
   step "PASS weight ${weight}"
 }
 
 metric_gate() {
   local weight=$1
-  local q_up q_rate q_err
+  local q_up q_rate
   q_up='min(up{namespace="sensor",service="sensor-canary-api"})'
-  # Трафик и ошибки считаем по ingress-nginx (canary-Ingress), а не по метрикам API:
-  # пробы kubelet и scrape в эти ряды не попадают.
+  # Rate is the canary ingress series (kubelet probes are not in it). The 5xx
+  # share is the unheadered sample from weight_gate, not this rate.
   q_rate='sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m]))'
-  q_err='(sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+",status=~"5.."}[2m])) or vector(0)) / sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m]))'
 
   if ! prom_reachable; then
     rollback_canary "prometheus unreachable at ${prom_url}; metric gate cannot run"
   fi
 
-  # Основной гейт — метрики ingress-nginx (трафик и доля 5xx canary-апстрима): их
-  # Prometheus уже собирает. Target canary из нового ServiceMonitor Prometheus
+  # up и rate — метрики ingress-nginx и ServiceMonitor. Target canary Prometheus
   # подхватывает с задержкой (operator + reload; в e2e на k3s бывало > 180 с),
   # поэтому up проверяется, только если target успел появиться за 120 с.
+  # Доля 5xx — коды той же выборки без заголовка (/ready, /, /api/v1/service).
   local t0=$SECONDS have_up=1
   until prom_sample "$q_up" >/dev/null 2>&1; do
     if ((SECONDS - t0 > 120)); then
@@ -499,7 +633,7 @@ metric_gate() {
       rollback_canary "${q_up}=${sample_value} at weight ${weight}, want 1"
     fi
   else
-    step "NOTE target sensor-canary-api not discovered yet; gate uses ingress-nginx metrics only"
+    step "NOTE target sensor-canary-api not discovered yet; rate uses ingress-nginx, 5xx uses the HTTP sample"
   fi
 
   step "query ${q_rate}"
@@ -509,17 +643,22 @@ metric_gate() {
     rollback_canary "${q_rate}=${sample_value} at weight ${weight}, want > 0"
   fi
 
-  step "query ${q_err}"
-  load_finite_sample "$q_err" "$weight"
-  step "canary 5xx ratio=${sample_value}"
-  if ! metric_below "$sample_value" 0.05; then
-    rollback_canary "canary 5xx ratio ${sample_value} at weight ${weight}, want >= 0 and < 0.05"
+  if [[ -z "$sample_5xx_ratio" ]]; then
+    rollback_canary "unheadered weight sample did not produce a 5xx ratio at weight ${weight}"
+  fi
+  step "unheadered sample 5xx ratio=${sample_5xx_ratio} (${sample_5xx_hits}/${sample_5xx_total}) on /ready, /, /api/v1/service without X-Canary (401 is not 5xx)"
+  if ! metric_finite "$sample_5xx_ratio"; then
+    rollback_canary "unheadered sample 5xx ratio is not finite (${sample_5xx_ratio}) at weight ${weight}"
+  fi
+  if ! metric_below "$sample_5xx_ratio" 0.05; then
+    rollback_canary "unheadered sample 5xx ratio ${sample_5xx_ratio} (${sample_5xx_hits}/${sample_5xx_total}) at weight ${weight}, want >= 0 and < 0.05"
   fi
   step "PASS metrics at weight ${weight}"
 }
 
 self_test() {
-  local lo hi work hdr body got
+  local lo hi work hdr body got err five total ratio i
+  local -a statuses
   metric_finite 0
   metric_finite 0.04
   metric_finite 0.049
@@ -594,6 +733,102 @@ self_test() {
   assert_bounds 20 1 40
   assert_bounds 90 70 99
   assert_bounds 5 1 25
+
+  assert_ingress_bounds() {
+    local w="$1" want_lo="$2" want_hi="$3"
+    read -r lo hi < <(ingress_share_bounds "$w")
+    if [[ "$lo" != "$want_lo" || "$hi" != "$want_hi" ]]; then
+      printf 'self-test: ingress weight %s bounds %s-%s, want %s-%s\n' "$w" "$lo" "$hi" "$want_lo" "$want_hi" >&2
+      return 1
+    fi
+  }
+  assert_ingress_bounds 0 0 0
+  assert_ingress_bounds 10 2 25
+  assert_ingress_bounds 50 30 70
+  assert_ingress_bounds 100 95 100
+  assert_ingress_bounds 90 70 99
+
+  if [[ "$(response_share_percent 100 100)" != 100 ]] \
+    || [[ "$(response_share_percent 49 100)" != 49 ]] \
+    || [[ "$(response_share_percent 10 100)" != 10 ]] \
+    || [[ "$(response_share_percent 99 99)" != 100 ]]; then
+    printf 'self-test: HTTP 200 version share is wrong\n' >&2
+    return 1
+  fi
+  if response_share_percent 0 0 >/dev/null || response_share_percent 1 0 >/dev/null; then
+    printf 'self-test: version share accepted an empty HTTP 200 set\n' >&2
+    return 1
+  fi
+
+  read -r five total ratio < <(http_5xx_summary 401 200 401)
+  if [[ "$five" != 0 || "$total" != 3 || "$ratio" != "0.000000" ]] || ! metric_below "$ratio" 0.05; then
+    printf 'self-test: 401 counted as 5xx (%s %s %s)\n' "$five" "$total" "$ratio" >&2
+    return 1
+  fi
+  read -r five total ratio < <(http_5xx_summary 500 401 200 200)
+  if [[ "$five" != 1 || "$total" != 4 || "$ratio" != "0.250000" ]] || metric_below "$ratio" 0.05; then
+    printf 'self-test: 5xx ratio missed a 500 (%s %s %s)\n' "$five" "$total" "$ratio" >&2
+    return 1
+  fi
+  statuses=()
+  for ((i = 0; i < 95; i++)); do
+    statuses+=(200)
+  done
+  statuses+=(401 401 401 401 401)
+  read -r five total ratio < <(http_5xx_summary "${statuses[@]}")
+  if [[ "$five" != 0 || "$total" != 100 || "$ratio" != "0.000000" ]] || ! metric_below "$ratio" 0.05; then
+    printf 'self-test: 401-only sample failed the 5xx gate (%s %s %s)\n' "$five" "$total" "$ratio" >&2
+    return 1
+  fi
+  # 4/100 = 0.04 is inside the gate. 5/100 = 0.05 is not.
+  statuses=()
+  for ((i = 0; i < 96; i++)); do
+    statuses+=(200)
+  done
+  statuses+=(500 500 500 500)
+  read -r five total ratio < <(http_5xx_summary "${statuses[@]}")
+  if [[ "$five" != 4 || "$total" != 100 || "$ratio" != "0.040000" ]] || ! metric_finite "$ratio" || ! metric_below "$ratio" 0.05; then
+    printf 'self-test: 4/100 5xx ratio should pass (%s %s %s)\n' "$five" "$total" "$ratio" >&2
+    return 1
+  fi
+  statuses=()
+  for ((i = 0; i < 95; i++)); do
+    statuses+=(200)
+  done
+  statuses+=(500 500 500 500 500)
+  read -r five total ratio < <(http_5xx_summary "${statuses[@]}")
+  if [[ "$five" != 5 || "$total" != 100 || "$ratio" != "0.050000" ]] || metric_below "$ratio" 0.05; then
+    printf 'self-test: 5/100 5xx ratio should fail (%s %s %s)\n' "$five" "$total" "$ratio" >&2
+    return 1
+  fi
+  if http_5xx_summary >/dev/null || http_5xx_summary 000 >/dev/null || http_5xx_summary 200 99 >/dev/null; then
+    printf 'self-test: non-HTTP status produced a 5xx ratio\n' >&2
+    return 1
+  fi
+
+  err="$(mktemp)"
+  rollback_failed=0
+  note_rollback_failure "set canary weight 0" 2>"$err"
+  if [[ "$rollback_failed" -ne 1 ]] || ! grep -qx 'error: set canary weight 0 failed' "$err"; then
+    printf 'self-test: weight-0 failure was swallowed\n' >&2
+    rm -f -- "$err"
+    return 1
+  fi
+  rollback_failed=0
+  note_rollback_failure "helm uninstall sensor-canary -n sensor --wait --timeout 3m --ignore-not-found" 2>"$err"
+  if [[ "$rollback_failed" -ne 1 ]] || ! grep -qx 'error: helm uninstall sensor-canary -n sensor --wait --timeout 3m --ignore-not-found failed' "$err"; then
+    printf 'self-test: uninstall failure was swallowed\n' >&2
+    rm -f -- "$err"
+    return 1
+  fi
+  rollback_failed=0
+  note_rollback_failure "helm rollback sensor 0 -n sensor --wait --timeout 3m" 2>"$err"
+  if [[ "$rollback_failed" -ne 1 ]] || ! grep -qx 'error: helm rollback sensor 0 -n sensor --wait --timeout 3m failed' "$err"; then
+    printf 'self-test: stable rollback failure was swallowed\n' >&2
+    rm -f -- "$err"
+    return 1
+  fi
+  rm -f -- "$err"
 
   assert_share() {
     got="$(metric_share_percent "$1" "$2" "$3" "$4")" || {
@@ -792,10 +1027,14 @@ main() {
   # Stable first, while canary still takes the current weight (100 on the
   # default ladder). Then drop the weight to 0 and only then uninstall, so
   # ingress-nginx is not left sending every request at a backend that is gone.
+  # deploy.sh rolls itself back when helm or its smoke fails. Once it
+  # returns, stable is on TAG. A rollout that then fails must undo that.
+  stable_needs_rollback=0
   step "promoting ${TAG} to stable via deploy.sh"
   if ! "${ROOT}/scripts/deploy.sh" "$TAG"; then
     rollback_canary "promote via deploy.sh failed for ${TAG}"
   fi
+  stable_needs_rollback=1
   step "waiting for stable rollout of tag ${TAG}"
   if ! kubectl -n sensor rollout status deployment/sensor-api --timeout=180s; then
     rollback_canary "stable api rollout did not finish for ${TAG}"
@@ -803,6 +1042,7 @@ main() {
   if ! kubectl -n sensor rollout status deployment/sensor-web --timeout=180s; then
     rollback_canary "stable web rollout did not finish for ${TAG}"
   fi
+  stable_needs_rollback=0
   if ! set_canary_weight 0; then
     rollback_canary "failed to set canary weight 0 before uninstall"
   fi
