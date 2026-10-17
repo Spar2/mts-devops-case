@@ -45,7 +45,7 @@
 | Сеть ВМ (netplan) | `infra/cloud-init/network-config.yaml` → `libvirt_cloudinit_disk.network_config` | `cloud-init schema` (job `iac`) | Схема валидна (cloud-init 26.1); ВМ не поднималась |
 | Безопасность подов | securityContext, NetworkPolicy, PDB в чарте | `make k8s-netpol-check` | NetworkPolicy проверена в e2e на GitHub (чужой namespace → BLOCKED, web → API → REACHED) |
 | Доставка алерта | Alertmanager → webhook `alert-sink` | `make k8s-alert-demo` | Проверено: firing → webhook → resolved (e2e и box) |
-| LLM: генерация конфигов с фиксацией промптов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Замер выбора модели: 3/3 YAML+promtool с первой попытки (`docs/llm/model-choice.md`). Отдельный прогон в `docs/llm/examples/runs.jsonl`: из трёх правил два valid, правило задержки отвергнуто promtool. Job `llm` в CI |
+| LLM: генерация конфигов с фиксацией промптов | `llm/`, `scripts/llm-*.sh`, `docs/llm/` | `make llm-up && make llm-gen`, `make llm-test` | Замер выбора модели: 3/3 YAML+promtool с первой попытки (`docs/llm/model-choice.md`). В `docs/llm/examples/runs.jsonl` четыре записи `task=rule`: три valid (5xx и дважды memory), задержка отвергнута promtool со второй попытки; таблица 3/3 этим файлом не подтверждается. Job `llm` в CI |
 | Видео ≤ 5 мин | `docs/demo-script.md` | — | Сценарий готов, ролик снимает команда |
 
 ## Состав команды (роли, опыт и навыки)
@@ -178,7 +178,7 @@ make k8s-rollback-demo   # битый тег образа → helm --atomic от
 make k8s-rotate-demo     # ротация пароля: старый пароль и старая cookie → 401, новый → 200
 make k8s-alert-demo      # API выключается → SensorGatewayDown firing → Alertmanager → webhook alert-sink → API обратно → resolved
 make k8s-netpol-check    # NetworkPolicy: под из чужого namespace не достаёт API, web достаёт (нужен работающий контроллер политик)
-make down                # K3D=1: удалить кластер k3d и Compose-демо; K3D=0: снять Helm-релизы, k3s целиком не удаляет
+make down                # demo-down, если есть .env; K3D=1: ещё k3d cluster delete; K3D=0: снять релизы sensor-canary, sensor, mon, k3s не удаляет
 ```
 
 Другие режимы:
