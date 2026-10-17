@@ -190,6 +190,23 @@ install_canary() {
   # проверил бы не тот релиз: явно ждём оба Deployment canary.
   kubectl -n sensor rollout status deployment/sensor-canary-api --timeout=120s || return 1
   kubectl -n sensor rollout status deployment/sensor-canary-web --timeout=120s || return 1
+  wait_ingress_backend
+}
+
+# ingress-nginx применяет новый canary-Ingress с задержкой; до этого X-Canary: always
+# уходит в stable. Ждём (до 90 с), пока у контроллера появится backend canary с endpoint.
+wait_ingress_backend() {
+  local i be=sensor-sensor-canary-web-http
+  for ((i = 0; i < 45; i++)); do
+    if kubectl -n ingress-nginx exec deploy/ingress-nginx-controller -- /dbg backends get "$be" 2>/dev/null \
+        | grep -q '"address"'; then
+      step "ingress-nginx backend ${be} has endpoints"
+      return 0
+    fi
+    sleep 2
+  done
+  step "ingress-nginx backend ${be} has no endpoints after 90s"
+  return 1
 }
 
 # 0 when ${PROM_URL}/-/ready answers any HTTP status. Connection failure is
