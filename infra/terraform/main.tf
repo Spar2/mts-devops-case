@@ -28,6 +28,7 @@ resource "libvirt_cloudinit_disk" "sensor" {
     repo_url       = var.repo_url
     github_token   = var.github_token
     ssh_public_key = var.ssh_public_key
+    run_make_up    = var.run_make_up
   })
   network_config = file("${path.module}/../cloud-init/network-config.yaml")
   meta_data = yamlencode({
