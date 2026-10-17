@@ -9,7 +9,7 @@
 Что есть на самом деле:
 
 - **CI (GitHub Actions, `ci.yml`).** На каждый push и pull request: линт, тесты, проверки манифестов, IaC (Terraform, Ansible, cloud-init, Trivy config), сборка, Trivy образов. На уровне workflow `permissions: contents: read`. Job `images` (pull request и push не в `main`) собирает и сканирует, без push и без `packages: write`. Job `images-publish` (только push в `main`) поднимает `packages: write`, пушит образы в приватный GHCR и кладёт SBOM. Concurrency `ci-${{ github.ref }}`: push в одну ветку ждёт в очереди без отмены, чтобы прогоны не перетирали `:latest` не по порядку; pull request отменяет предыдущий прогон. Все `uses:` закреплены по SHA коммита. Локально: `make lint` и `make test` — jobs `lint`, `api`, `web`, `helm`, `manifests`, `dockerfiles`, `shellcheck` и `ruff` из job `llm`. Не входят job `images`, `images-publish` и job `iac` (раздел «CI локально»).
-- **CD.** Выкладка в кластер идёт командами `make up`, `make k8s-deploy` и `make k8s-canary`: Helm `--atomic`, smoke, canary через ingress-nginx с PromQL-гейтом и автооткатом. По умолчанию образы собираются локально из того же коммита.
+- **CD.** Выкладка в кластер идёт командами `make up`, `make k8s-deploy` и `make k8s-canary`: Helm `--atomic`, smoke, canary через ingress-nginx с PromQL-гейтом и автооткатом. Stable собирается из текущего коммита. `make k8s-canary` собирает тот же исходник отдельным тегом `<sha>-canary`.
 - **e2e в Actions (`e2e.yml`).** На pull request в `main` (кроме правок только `*.md`/`docs/`) прогоняется только k3d. На push в `main` с тем же фильтром и вручную через `workflow_dispatch` — оба варианта, k3d и нативный k3s. Устаревший прогон того же PR отменяется; прогон `main` не прерывается (группа `e2e-${{ github.ref }}`). Секретов workflow нет, `permissions: contents: read`, образы собираются на раннере. `make status` при `CI=true` пароли не печатает. Шаг после `make up` и шаг после ротации читают Secret и регистрируют `::add-mask::`.
 - **Без CD-деплоя из Actions.** Отдельного деплоя в постоянный кластер из Actions нет: у проекта нет постоянного кластера, доступного GitHub.
 
@@ -37,7 +37,7 @@
 | Публикация в registry | job `images-publish`: push в `ghcr.io/spar2/mts-devops-case/*` только из `main`, право `packages: write` только у этого job. На pull request job `images` без push | Actions → images-publish → Push images | Push был в зелёном прогоне job `images`. Job `images-publish` на GitHub не перепроверялся |
 | Проверка манифестов | `scripts/lint-manifests.sh` (kubeconform 0.6.7: stable, canary, два манифеста мониторинга), hadolint 2.12.0, shellcheck 0.10.0 | `make lint` | Проверено локально: `make lint` код 0. Сломанный YAML и скрипт с ошибкой shellcheck дают ненулевой код (правки откачены). Job `manifests` вызывает тот же скрипт |
 | CD: Helm + откат | `deploy/helm/sensor-gateway` (RollingUpdate `maxUnavailable: 0`, `preStop`), `scripts/deploy.sh` (`--atomic` + smoke + `helm rollback` / `uninstall`) | `make k8s-rollback-demo`; без кластера — `scripts/test-deploy-rollback.sh` в `make lint` | Проверено на кластере: битый тег → откат `--atomic`; провал smoke → `helm rollback` (лог `docs/cd-demo-log.md`). С `preStop` полный прогон с нуля на box 2026-10-17: `make up`, canary, canary-fail, rollback-demo, alert-demo — PASS. Ветка «нет ревизий / одна ревизия / ошибка самого rollback» на кластере этим прогоном не покрыта: её гоняет `test-deploy-rollback.sh` (заглушки helm/kubectl) |
-| CD: canary через ingress | `scripts/canary.sh` (вес 10→50→100, smoke + PromQL: `up`, трафик и доля 5xx canary по метрикам ingress-nginx) | `make k8s-canary` | Проверено: успешный canary с promote и провальный canary с автооткатом, stable не задет (`docs/cd-demo-log.md`) |
+| CD: canary через ingress | `scripts/canary.sh`: тег `CANARY_TAG` (по умолчанию `<sha>-canary`), импорт в k3d-кластер `CLUSTER` (по умолчанию `mts`), `/ready` отдаёт тег (`version` и `X-App-Version`), вес 10→50→100, smoke этой версии, доля ответов и доля canary-Ingress в допуске веса, PromQL (`up`, трафик, 5xx; NaN/Inf — откат), promote: stable → rollout → вес 0 → ingress → uninstall | `make k8s-canary` | Локально проверены разбор NaN/Inf, границы веса и парсер версии (`CANARY_SELF_TEST=1 ./scripts/canary.sh`), `bash -n`, shellcheck 0.10.0, `helm lint`/`template`, `make lint`, pytest `/ready`. Кластер не поднимался, живого прогона нового гейта нет. `docs/cd-demo-log.md` — прежний скрипт на кластере (тот же тег, что stable, без проверки веса, uninstall сразу после promote): успешный canary с promote и провальный с автооткатом, stable не задет |
 | Сессии не теряются между stable и canary | подписанная cookie (HMAC) в `services/api/app/main.py` | тесты + запрос с cookie от stable в canary | Проверено: 200 на canary с cookie, выданной stable |
 | Секреты вне git | SOPS 3.9.2 + age 1.2.1, `scripts/secrets-*.sh`, `deploy/secrets/README.md` | `scripts/secrets-rotate-check.sh` | Лог 2026-10-17: старый пароль и cookie → 401, новый → 200 (`docs/secrets-rotation-log.md`). Без паузы перед SIGTERM на 1 реплике скрипт ловил 502; с `preStop` и ожиданием ухода старых подов в `secrets-rotate.sh` — 3 прогона подряд PASS на box 2026-10-17 |
 | Мониторинг: дашборд | `deploy/monitoring/` (kube-prometheus-stack 65.1.1) | Grafana → дашборд `sensor-gateway` | Проверено в k3d, скриншот `docs/img/grafana-sensor-gateway.png` |
@@ -83,7 +83,7 @@ flowchart LR
     prom -->|ServiceMonitor /metrics| capi
   end
   cd[deploy.sh / canary.sh: helm --atomic, smoke, PromQL-гейт, rollback] --> ns
-  cd -->|PromQL: up, трафик и 5xx canary| prom
+  cd -->|PromQL: up, трафик, 5xx и доля canary| prom
   prom -->|ServiceMonitor| ing
   user[Браузер] --> ing
   ing -->|stable| web
@@ -178,7 +178,7 @@ make up
 Демонстрации на поднятом стенде (каждая — одна команда, все прогоняются в GitHub Actions, job `e2e`):
 
 ```bash
-make k8s-canary          # canary 10 → 50 → 100: smoke + PromQL-гейт (up, трафик, доля 5xx по ingress-nginx), затем promote
+make k8s-canary          # образ <sha>-canary, вес 10→50→100: версия /ready, доля веса, PromQL (up, трафик, 5xx), promote через вес 0
 make k8s-canary-fail     # canary с неверным секретом → автоматический откат, stable не задет
 make k8s-rollback-demo   # битый тег образа → helm --atomic откатывает релиз, печатается helm history
 make k8s-rotate-demo     # ротация пароля: старый пароль и старая cookie → 401, новый → 200
@@ -229,14 +229,31 @@ make test
   число ревизий берётся из `helm history -o json`. Ошибка history, пустой вывод, битый JSON и не-список считаются нулём ревизий и не обрывают скрипт до отката.
   Ноль или одна ревизия — `helm uninstall sensor` (предыдущей нет). Две и больше — `helm rollback sensor 0`. Если uninstall или rollback сам завершился с ошибкой, скрипт печатает `error: helm uninstall … failed` или `error: helm rollback … failed` и выходит с кодом 1. Успешный откат после проваленного smoke тоже код 1.
   Сценарий без кластера — `scripts/test-deploy-rollback.sh` (`make lint`). На живом кластере откат по-прежнему в `docs/cd-demo-log.md` и `make k8s-rollback-demo` (это `--atomic`, не ветка smoke).
-- `scripts/canary.sh TAG` — релиз `sensor-canary` с аннотациями ingress-nginx `canary`, `canary-weight`, `canary-by-header: X-Canary`.
-  На каждом шаге: smoke через `X-Canary: always`, нагрузка через ingress, затем PromQL (`up` canary — если Prometheus успел обнаружить target за 120 с; основной гейт — метрики ingress-nginx):
-  `min(up{namespace="sensor",service="sensor-canary-api"}) == 1`;
-  `sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m])) > 0`
-  (запросы именно через canary-апстрим ingress-nginx, пробы kubelet сюда не попадают);
-  доля 5xx среди них `< 0.05`. Prometheus недоступен → тоже откат, а не пропуск. Port-forward на 9090 поднимает
-  `scripts/prom-forward.sh` и ждёт `/-/ready`. Любой провал → вес 0, удаление canary, `ROLLBACK canary: <причина>`.
-  Успех → promote в stable через `deploy.sh`, удаление canary.
+- `make k8s-canary` собирает и импортирует `sensor-gateway` и `sensor-web` с тегом `CANARY_TAG`
+  (по умолчанию `<короткий sha>-canary`, команда не принимает тег, равный `TAG`). В k3d импорт — `k3d image import -c $(CLUSTER)` (по умолчанию `mts`, та же переменная, что у `make up`). Дальше вызывается `scripts/canary.sh`.
+  `make k8s-canary-fail` по-прежнему передаёт `TAG`: это образ stable после `make up`, проверяется отказ входа.
+- Чарт пишет тег образа API в `APP_VERSION`. `GET /ready` отдаёт его в JSON (`version`) и в заголовке `X-App-Version`.
+  Поле `version` у `GET /api/v1/service` остаётся `0.1.0`.
+- `scripts/canary.sh TAG` ставит релиз `sensor-canary` с аннотациями ingress-nginx `canary`, `canary-weight`,
+  `canary-by-header: X-Canary`. На каждом шаге (по умолчанию 10, 50, 100) ждёт, пока у backend canary
+  `trafficShapingPolicy.weight` в ingress-nginx станет равен шагу (до 90 с, `/dbg backends`). Дальше:
+  1. smoke через `X-Canary: always` и `EXPECT_VERSION` равный тегу canary: и JSON, и заголовок `/ready` должны совпасть с ним;
+  2. `WEIGHT_SAMPLE_N` запросов (по умолчанию 100) на `/ready` без заголовка. Доля ответов canary — целое `hits*100/N`.
+     Допуск: 10 → 2–25, 50 → 30–70, 100 → 100. Другой вес `w` от 1 до 99 — от `max(1, w-20)` до `min(99, w+20)`, вес 0 — только 0;
+  3. та же доля по приросту счётчика `nginx_ingress_controller_requests`: числитель `canary=~".+sensor-canary.+"`,
+     знаменатель — все запросы `exported_namespace="sensor"`. Перед базовой точкой пауза `WEIGHT_SETTLE_S` (20 с),
+     чтобы smoke с `X-Canary: always` уже попал в scrape (интервал ServiceMonitor ingress-nginx — 15 с).
+     Прирост общего счётчика меньше 80% серии за `WEIGHT_METRIC_WAIT_S` (60 с) — откат. Процент метрик — ближайшее целое;
+  4. PromQL: `min(up{namespace="sensor",service="sensor-canary-api"}) == 1`, если target появился за 120 с;
+     `sum(rate(nginx_ingress_controller_requests{exported_namespace="sensor",canary=~".+sensor-canary.+"}[2m])) > 0`
+     (это canary-апстрим ingress-nginx, пробы kubelet сюда не попадают);
+     доля 5xx среди них `>= 0` и `< 0.05`.
+     `NaN`, `+Inf`, `-Inf`, пустое и нечисловое значение на любом из этих трёх запросов — откат.
+     На awk Ubuntu (mawk) `NaN` и `Inf` становятся 0, поэтому голое сравнение «меньше 0.05» приняло бы пустой знаменатель.
+  Prometheus недоступен → тоже откат, а не пропуск. Port-forward на 9090 поднимает `scripts/prom-forward.sh` и ждёт `/-/ready`.
+  Любой провал → вес 0, удаление canary, `ROLLBACK canary: <причина>`. Stable при отказе гейта не меняется.
+  Успех: `deploy.sh` обновляет stable на тег canary и ждёт rollout (`kubectl rollout status` api и web),
+  затем вес canary в 0, то же ожидание weight в ingress-nginx, и только потом `helm uninstall sensor-canary`.
 - Stable smoke во время canary шлёт `X-Canary: never`, чтобы проверять именно stable.
 - У api и web RollingUpdate `maxUnavailable: 0`, `maxSurge: 1` и `preStop: sleep 5`: старый под не снимают, пока новый не Ready, и SIGTERM уходит только после паузы, чтобы Endpoints и kube-proxy успели убрать под. Иначе nginx web отдаёт 502. `terminationGracePeriodSeconds: 40` покрывает паузу и штатное завершение; uvicorn по SIGTERM сам перестаёт принимать соединения и дожидается текущих, отдельный обработчик в приложении не добавлялся.
 
@@ -247,6 +264,7 @@ make test
 
 ### Что не проверено и ограничения
 
+- **Canary-гейт с отдельным тегом** (доля веса по ответам и по счётчику ingress-nginx, отказ на NaN/Inf, promote через вес 0) на кластере не запускался. Локально проверены только разбор чисел и границы (`CANARY_SELF_TEST=1 ./scripts/canary.sh`), линтеры и pytest `/ready`. `docs/cd-demo-log.md` описывает прежний скрипт.
 - **Нативный k3s на Ubuntu** (`make up K3D=0`) проверен только в GitHub Actions (e2e, `ubuntu-24.04`). На box его нет: в песочнице нет systemd и vxlan.
   Для k3d-прогонов на box понадобились параметры
   `K3D_PRELOAD=1` (из подов нет egress), `INGRESS_SERVICE_TYPE=NodePort` (не работает hostPort) и host-gw вместо vxlan —
@@ -259,9 +277,9 @@ make test
 
 ## Мониторинг и наблюдаемость
 
-- Сервис отдаёт `/health`, `/ready`, `/metrics`. Метрики пишет `prometheus_client` 0.26.0: гистограмма `http_request_duration_seconds` и счётчик `http_requests_total` с метками `method`, `path` (шаблон маршрута, для несовпавшего пути `unmatched`), `status`; `service_up` — 1, если проверка готовности проходит (ключ сессии подписывает и проверяет токен), иначе 0 и `/ready` отвечает 503; `service_probe_latency_seconds` — измеренное время последнего `POST /api/v1/service/probe` (синтетическое показание, без искусственной паузы). Реестр по умолчанию также отдаёт `process_*`, в том числе `process_resident_memory_bytes`.
+- Сервис отдаёт `/health`, `/ready`, `/metrics`. При успешной проверке готовности `GET /ready` отдаёт JSON `status` и `version` (тег образа из `APP_VERSION`) и заголовок `X-App-Version`; если проверка не проходит — 503, `service_up` становится 0. Метрики пишет `prometheus_client` 0.26.0: гистограмма `http_request_duration_seconds` и счётчик `http_requests_total` с метками `method`, `path` (шаблон маршрута, для несовпавшего пути `unmatched`), `status`; `service_up` — 1, если ключ сессии подписывает и проверяет токен; `service_probe_latency_seconds` — измеренное время последнего `POST /api/v1/service/probe` (синтетическое показание, без искусственной паузы). Реестр по умолчанию также отдаёт `process_*`, в том числе `process_resident_memory_bytes`.
 - Снаружи `/metrics` закрыт: nginx web отвечает 403. Ingress направляет запрос на Service web и сам путь не режет. ServiceMonitor (label `release: mon`) скрейпит Service API напрямую, stable и canary.
-- Метрики ingress-nginx (`controller.metrics.enabled`, ServiceMonitor `deploy/monitoring/ingress-nginx-servicemonitor.yaml`): по ним считаются трафик и 5xx canary.
+- Метрики ingress-nginx (`controller.metrics.enabled`, ServiceMonitor `deploy/monitoring/ingress-nginx-servicemonitor.yaml`, интервал 15 с): по ним считаются трафик, доля 5xx canary и доля запросов canary-Ingress (label `canary`) от всех запросов namespace `sensor`.
 - Дашборд Grafana `sensor-gateway` (`deploy/monitoring/dashboard-configmap.yaml`): число живых таргетов API, `up` по таргетам, req/s по сервисам, p95 `http_request_duration_seconds` (порог 0.5 с), доля 5xx через ingress-nginx.
 
   ![Grafana](docs/img/grafana-sensor-gateway.png)
@@ -319,79 +337,50 @@ make test
 
 ## Использование LLM
 
-В работе службы sensor-gateway языковой модели нет. LLM — опциональный локальный помощник SRE в конвейере:
-малая GGUF-модель на llama.cpp пишет черновик PrometheusRule по одной фразе и объясняет провал canary. Внешних API и ключей нет,
-`make up` / `make k8s-up` и CI от модели не зависят. Её системные промпты — `llm/prompts/*.txt`, журнал запусков — `llm/out/runs.jsonl`.
+### Что это
 
-### Локальная LLM в конвейере (опционально)
+В работе службы sensor-gateway языковой модели нет. LLM — опциональный локальный помощник: [Ternary-Bonsai-2-4B](https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf) Q2_0 (файл `Ternary-Bonsai-2-4B-Q2_0.gguf`, 1.21 ГБ, Apache-2.0, без токена; sha256 в `llm/models.tsv`, проверяет `make llm-fetch`) на llama.cpp, образ `ghcr.io/ggml-org/llama.cpp:server-b11681`. Только CPU (AVX2), без GPU. Лимит контейнера 2 ГБ (`LLM_MEM`, по умолчанию `2g` в `scripts/llm-up.sh`). Внешних API и ключей нет. `make up`, `make k8s-up` и CI модель не запускают: job `llm` гоняет валидатор (`make llm-test`), не llama-server.
 
-Модель не заменяет ни службу, ни проверки: она пишет черновик PrometheusRule по одной фразе и объясняет провал canary,
-а каждый результат проходит автоматическую проверку и ревью человека. `make up` / `make k8s-up` от неё не зависят.
+Пиковый RSS 1.66 ГБ (0.47 ГБ анонимной + 1.19 ГБ отображённых весов) и 14.5 ток/с — прежний замер на 6 потоках (`LLM_THREADS=6`), в повтор 2026-10-17 не снимались. По умолчанию сервер берёт `-t 4`. Запасной файл для машин с 8 ГБ — `LLM_NAME=ternary-bonsai-2-2b`; в этот день не запускался. Сравнение семи моделей — [docs/llm/model-choice.md](docs/llm/model-choice.md).
 
-- **Модель:** [prism-ml/Ternary-Bonsai-2-4B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf),
-  файл `Ternary-Bonsai-2-4B-Q2_0.gguf` (тернарные веса), **1.21 ГБ**, лицензия **Apache-2.0**, без gated-доступа и токена.
-  sha256 `64a5183b44921bdb5ac4a6f5f92007821d6ebe5c66997d3c147fd214ab9433d4` (проверяется скриптом).
-- **Почему она:** из 7 замеренных моделей (Bonsai 1.7B/4B/8B 1-бит, Ternary-Bonsai-2 2B/4B, Qwen2.5-Coder 0.5B/1.5B)
-  оставлена моделью по умолчанию: Apache-2.0, без токена, файл 1.21 ГБ, upstream llama.cpp. Ток/с и память в
-  `docs/llm/model-choice.md` — прежний замер `-t 6`, в повтор 2026-10-17 не входили. Этот повтор (`make llm-up` по умолчанию, `-t 4`):
-  три фразы из того файла, с первой попытки valid одна из трёх (5xx, 16.88 с). Задержка 51.11 с, attempts 2, valid false.
-  Память 104.27 с, valid со второй попытки. `make llm-explain` — 66.67 с, attempts 1, valid. Журнал обоих прогонов — `docs/llm/examples/runs.jsonl`.
-- **Рантайм:** официальный `ghcr.io/ggml-org/llama.cpp:server-b11681` (upstream, форк PrismML не нужен), OpenAI-совместимый
-  API на `127.0.0.1:8090`, только CPU (AVX2), лимит контейнера 2 ГБ.
-- **Ресурсы:** пиковый RSS 1.66 ГБ (0.47 ГБ анонимной + 1.19 ГБ отображённых весов) и 14.5 ток/с — прежний замер на 6 потоках (`LLM_THREADS=6`), в повторе 2026-10-17 не снимались. По умолчанию `scripts/llm-up.sh` берёт `-t 4`. Времена повтора — выше и в `docs/llm/model-choice.md`. Для 8 ГБ машин: `LLM_NAME=ternary-bonsai-2-2b` (0.55 ГБ, ~0.7 ГиБ, 38 ток/с, слабее; в этот день не перезапускалась).
+### За что отвечает
+
+- Черновик правила алерта по одной фразе (`make llm-gen` → PrometheusRule).
+- Объяснение отката canary (`make llm-explain`). Если llama-server отвечает на `/health`, `scripts/canary.sh` после отката сам вызывает `scripts/llm-explain-hook.sh`: текст в консоль и в `llm/out/canary-explain-<время>.md`. Откат к этому моменту уже сделан. Хук всегда завершается с 0, таймаут `LLM_EXPLAIN_TIMEOUT` (240 с). Сервера нет — одна строка «объяснение пропущено». Выключить: `LLM_EXPLAIN=0`.
+- Черновик release notes (`make llm-notes`) из `git log` и diffstat. В коде это `llm/llm_gen.py notes` и промпт `llm/prompts/release-notes.system.txt`: разделы «Что изменилось», «Риски», «Как проверить», только по файлам из входа. В `docs/llm/examples/runs.jsonl` один такой прогон: `2026-10-17T04:40:03+0300`, 59.29 с, valid.
+
+### Как работать
 
 ```bash
-make llm-up                       # скачать веса с HF (sha256) в llm/models/ и запустить llama-server
-make llm-gen DESC="Critical when process_resident_memory_bytes is above 400MB for 10m"
-make llm-explain                  # объяснить провал canary по llm/examples/canary-fail.log (или LOG=файл)
-make llm-notes RANGE=HEAD~3..HEAD # черновик release notes из git log/diffstat
-make llm-test                     # тесты валидатора без модели (они же в CI, job llm)
+make llm-up
+make llm-gen DESC="Critical alert when service_probe_latency_seconds is above 1 second for 2 minutes"
+make llm-explain
+make llm-notes RANGE=HEAD~3..HEAD
+make llm-test
 make llm-down
 ```
 
-Что проверяется в `llm-gen` (`llm/llm_gen.py`): YAML; `apiVersion/kind`; DNS-1123 имя; `release: mon` (иначе
-kube-prometheus-stack не подхватит); CamelCase имя алерта; если есть `for` — формат duration (отсутствие `for` не ошибка); `severity` warning|critical; summary/description;
-`promtool check rules` (образ `prom/prometheus:v2.54.1`); `rate()`/`increase()` по gauge и regex в `=`-матчере.
-При ошибке — один раунд: ошибки валидатора уходят модели, результат проверяется снова; если не прошёл — код выхода 1.
-В `llm-explain` — две проверки: ответ на русском (доля кириллицы ≥ 0.5, иначе один повтор с просьбой перевести;
-промпт на русском с примером ответа) и отсутствие выдуманных чисел: каждое число из 3 и более цифр (HTTP-коды, метки времени, теги) должно быть в логе;
-числа из 1–2 цифр (например, веса 10 и 50) не сверяются.
+`service_probe_latency_seconds` — ряд, который API пишет на `/metrics` (`services/api/app/main.py`). Та же фраза — `DESC` по умолчанию в Makefile. Доля 5xx на стенде считается по `nginx_ingress_controller_requests` (метки `exported_namespace`, `status` в `deploy/monitoring/prometheusrule.yaml`): это трафик через ingress, а не scrape API. У `http_requests_total` есть метки `method`, `path` и `status`. Гистограмма `http_request_duration_seconds` отдаёт `http_request_duration_seconds_bucket` (ещё метка `le`), `_sum` и `_count` с теми же метками приложения. Эти ряды и метки перечислены в `llm/metrics_whitelist.yaml`. `process_resident_memory_bytes` process collector отдаёт, в белый список он не входит.
 
-**Встроено в canary:** если llama-server доступен (`make llm-up`), `scripts/canary.sh` дублирует свой вывод в
-временный лог, а после отката вызывает `scripts/llm-explain-hook.sh`: объяснение печатается в консоль и пишется
-в `llm/out/canary-explain-<время>.md`. Откат к этому моменту уже выполнен; хук всегда завершается с 0, таймаут
-`LLM_EXPLAIN_TIMEOUT` (240 с), без LLM — одна строка «объяснение пропущено». Выключить: `LLM_EXPLAIN=0`.
-Проверено реальным прогоном `make k8s-canary-fail` на box: откат за ~32 с до объяснения, объяснение ~32 с
-(`docs/llm/examples/canary-rollback-hook.log`). В том прогоне ingress стенда не отвечал (HTTP 000 и для stable smoke —
-проблема стенда, не LLM); модель верно назвала упавшие проверки, но написала «stable прошёл», чего в логе не было —
-поэтому это подсказка, а не вердикт.
-Каждый запуск пишет в `llm/out/runs.jsonl`: модель, seed 42, temperature 0, файл системного промпта, полный пользовательский запрос (поле `user`; для explain — с хвостом лога), время, токены,
-результат валидации. Промпты — `llm/prompts/*.txt`.
+`make llm-up` качает веса в `llm/models/` и поднимает llama-server на `127.0.0.1:8090`. `make llm-explain` без `LOG` читает `llm/examples/canary-fail.log`. `make llm-test` — pytest валидатора без модели.
 
-Реальный вывод `make llm-explain` повтора 2026-10-17 (66.67 с, attempts 1, проверки пройдены):
+### Что проверяется автоматически
 
-```text
-- Что упало: проверка smoke `login` вернула HTTP 401 вместо 200 и отсутствовал сессионный токен `dts_session`.
-- Что сделал конвейер: вес canary выставлен в 0, релиз sensor-canary удалён через helm uninstall.
-- Затронут ли stable: нет — smoke stable прошёл успешно (HTTP 200, cookie dts_session).
-- Вероятная причина: canary не готов к работе из-за отсутствия валидного секрета (использовался `sensor-secrets-wrong`).
-- Что проверить дальше: `kubectl -n sensor describe secret sensor-secrets-wrong`, проверить логи контейнера api.
-```
+В `llm-gen` (`llm/llm_gen.py`): YAML; структура правила (`apiVersion`/`kind`, DNS-1123 имя, `release: mon`, CamelCase, duration если указан `for`, `severity` warning|critical, summary и description); `promtool check rules` (образ `prom/prometheus:v2.54.1`); белый список `llm/metrics_whitelist.yaml`. Неизвестная метрика или метка — невалидно. `histogram_quantile` только по ряду с суффиксом `_bucket` из этого списка: для задержки HTTP это `http_request_duration_seconds_bucket`. По самому `http_requests_total` квантиль невалиден. Отдельно: `rate()`/`irate()`/`increase()` по gauge и regex в `=`-матчере. При ошибке один раунд: текст ошибок уходит модели, ответ проверяется снова. Не прошёл — код выхода 1.
 
-В этом выводе cookie названа `dts_session`: так она называлась в прогоне 2026-10-17. Сейчас имя — `sensor_session`.
+В `llm-explain`: ответ на русском (доля кириллицы ≥ 0.5, иначе один повтор) и числа из 3+ цифр. Число должно быть отдельным токеном лога: `202` внутри даты `2026-10-16` не считается найденным. Числа из 1–2 цифр (веса 10 и 50) не сверяются. В `docs/llm/examples/canary-fail-explain.md` cookie названа `dts_session`: так она называлась в прогоне 2026-10-17. Сейчас имя — `sensor_session`.
 
-`docs/llm/examples/prometheusrule-memory.generated.yaml` — ранний английский прогон, не повтор 2026-10-17. В `docs/llm/examples/runs.jsonl` две записи с задачей `Critical when process_resident_memory_bytes is above 400MB for 10m`: `2026-10-17T04:37:27+0300`, 15.71 с, attempts 1, valid, completion_tokens 145; `2026-10-17T04:38:04+0300`, 25.91 с, attempts 1, valid, completion_tokens 145. Текста правила в журнале нет, поэтому файл не привязан к одной из этих двух строк.
+Каждый запуск пишет `llm/out/runs.jsonl`. Поле `model` — id загруженной модели (`GET /v1/models`), если сервер его не отдал — поле `model` ответа, иначе `LLM_MODEL`, иначе первая строка `llm/models.tsv`. Рядом seed 42, temperature 0, файл промпта, полный запрос (поле `user`), время, токены, результат. Промпты — `llm/prompts/*.txt`. Копия прогонов 2026-10-17 — `docs/llm/examples/runs.jsonl`.
 
-Повтор той же темы по-русски (`critical, если process_resident_memory_bytes > 400MB в течение 10m`): `2026-10-17T07:27:17+0000`, 104.27 с, attempts 2, valid, completion_tokens 152. YAML этого повтора в репозитории не сохранён.
+### Ограничения
 
-Прогоны выше сделаны, когда API ещё не подключал `prometheus_client` и `process_resident_memory_bytes` не отдавал: пример тогда проверял только синтаксис PromQL. Сейчас реестр `prometheus_client` 0.26.0 эту метрику отдаёт (process collector). `rate()` по ней валидатор по-прежнему отвергает: это gauge.
+Черновик правила — для ревью человеком, не для автодеплоя: promtool и белый список не проверяют смысл выражения. Объяснение — подсказка, откат от него не зависит. В `docs/llm/examples/canary-rollback-hook.log` откат уже записан в `2026-10-17T01:57:29Z`, объяснение печатается следом, строка `canary.sh rolled back` — `2026-10-17T01:58:01Z`. Модель назвала HTTP 000 и написала, что smoke stable прошёл, хотя этой строки в логе не было. Повтор `make llm-explain` 2026-10-17 (66.67 с, attempts 1, valid) — `docs/llm/examples/canary-fail-explain.md`, там снова «stable прошёл».
 
-Журнал прогонов — `docs/llm/examples/runs.jsonl`. Повтор rule0 (`critical, если service_probe_latency_seconds > 1 с в течение 2 мин`, 51.11 с, attempts 2, valid false): модель написала `sum(service_probe_latency_seconds{...}[2m])`, promtool отверг range vector, исправление тоже не прошло, `make llm-gen` завершился с кодом 1.
+Ответ в `docs/llm/examples/runs.jsonl` занимает от 15.71 с до 104.27 с. Повтор трёх фраз 2026-10-17 (`-t 4`), белого списка тогда не было: 5xx 16.88 с, attempts 1, valid (выражение с `status` у `http_requests_total`; эта метка сейчас в списке, `histogram_quantile` по самому счётчику, не по `*_bucket`, по-прежнему невалиден); задержка 51.11 с, attempts 2, valid false (promtool: range vector в `sum`); память 104.27 с, attempts 2, valid по тем проверкам (`process_resident_memory_bytes` process collector отдаёт, в белом списке его нет). Explain 66.67 с, attempts 1, valid. Прогоны сделаны, когда API ещё не подключал `prometheus_client`.
 
-Без ключа и без интернета: после `make llm-up` (единственный выход в сеть — скачивание весов и образов) всё работает
-офлайн, ключи не нужны. **Риски:** малая модель ошибается в смысле PromQL (валидные, но не те выражения) — поэтому
-правило — черновик для ревью, а не автодеплой; объяснение может перепутать
-детали — это подсказка, откат от неё не зависит. Повтор 2026-10-17: rule0 (задержка) 51.11 с, attempts 2, valid false; rule1 (5xx) 16.88 с, attempts 1, valid true; rule2 (память) 104.27 с, attempts 2, valid true; explain 66.67 с, attempts 1, valid true.
+`docs/llm/examples/prometheusrule-memory.generated.yaml` — ранний английский прогон, не повтор 2026-10-17. В журнале две строки задачи `Critical when process_resident_memory_bytes is above 400MB for 10m`: `2026-10-17T04:37:27+0300`, 15.71 с, attempts 1, valid, completion_tokens 145; `2026-10-17T04:38:04+0300`, 25.91 с, attempts 1, valid, completion_tokens 145. Текста правила в журнале нет, файл к одной из строк не привязан. Русский повтор той же темы (`2026-10-17T07:27:17+0000`, 104.27 с, attempts 2, completion_tokens 152) YAML в репозитории не оставил.
+
+После `make llm-up` сеть нужна только чтобы скачать веса и образы. Дальше запросы идут на `127.0.0.1:8090`, ключ не нужен.
 
 ## Troubleshooting
 
@@ -404,13 +393,16 @@ kube-prometheus-stack не подхватит); CamelCase имя алерта; �
 - Образ не собирается — нужен BuildKit и Compose V2 (есть в Ubuntu 24.04).
 - `make up K3D=0` падает на установке k3s — нужен sudo и доступ к get.k3s.io (режим k3d по умолчанию get.k3s.io не использует); повторный запуск идемпотентен.
 - `sha256 не совпал` при установке helm, kubectl или k3d — скачанный файл не равен сумме в `scripts/k3s-install.sh`. Повторный запуск качает файл заново. Если бинарь этой версии уже есть, скрипт его не перекачивает и сумму не считает.
-- Повторный `make up` пишет `предупреждение: k3d-кластер … уже существует` — образ, порт и `K3D_EXTRA_ARGS` к живому кластеру не применяются. Другое имя: `make up CLUSTER=имя`. Сменить параметры того же имени: `k3d cluster delete имя` и снова `make up`.
-- Поды в `ImagePullBackOff` — образы приложения не импортированы: `make k8s-images`; при закрытом egress из подов `K3D_PRELOAD=1` подгружает в k3d сторонние образы (ingress-nginx, мониторинг, alert-sink), образы приложения всегда импортирует `make k8s-images`.
+- Повторный `make up` пишет `предупреждение: k3d-кластер … уже существует` — образ, порт и `K3D_EXTRA_ARGS` к живому кластеру не применяются. Другое имя: `make up CLUSTER=имя`. Сменить параметры того же имени: `k3d cluster delete имя` и снова `make up`. `make k8s-canary` импортирует образы в тот же `CLUSTER`.
+- Поды в `ImagePullBackOff` — образы приложения не импортированы: stable — `make k8s-images` (тег `TAG`), canary — `make k8s-canary` (тег `CANARY_TAG`). Импорт k3d идёт в кластер `CLUSTER`. При закрытом egress из подов `K3D_PRELOAD=1` подгружает в k3d сторонние образы (ingress-nginx, мониторинг, alert-sink); образы приложения этот флаг не подменяет.
 - `sensor.localtest.me` не открывается — DNS не отдаёт 127.0.0.1: добавить `127.0.0.1 sensor.localtest.me grafana.localtest.me` в `/etc/hosts`.
 - Smoke падает на входе после смены секрета — Secret читается подами при старте; `scripts/secrets-apply.sh` сам делает `rollout restart`.
 - `Ключ age этой машины не совпадает с получателем` — файл зашифрован другим ключом: удалить `deploy/secrets/sensor-secrets.enc.yaml`
   и запустить `scripts/secrets-init.sh` заново (будет новый пароль).
-- Canary откатился с `prometheus returned no sample` — Prometheus ещё не снял две точки: увеличить `ANALYSIS_WAIT_S` (по умолчанию 75 с).
+- Canary откатился с `not a finite number` — Prometheus вернул NaN, Inf или нечисло. У доли 5xx так бывает, когда в знаменателе нет трафика: это откат, а не «ниже 0.05».
+- Canary откатился с `response share` или `ingress canary share` — доля canary не попала в допуск веса. Если `CANARY_TAG` совпадает с версией, которую уже отдаёт stable, шаг 10 даёт около 100% и тоже откатывается.
+- `CANARY_TAG совпадает с TAG` — `make k8s-canary` требует другой тег. По умолчанию берётся `<sha>-canary`.
+- Canary откатился с `prometheus returned no sample` или счётчик ingress «rose by» меньше 80% серии — Prometheus ещё не снял точки: увеличить `ANALYSIS_WAIT_S` (75 с) или `WEIGHT_METRIC_WAIT_S` (60 с). Пауза перед выборкой веса — `WEIGHT_SETTLE_S` (20 с).
 - Canary откатился с `prometheus unreachable` — нет доступа к Prometheus на 9090: смотреть `/tmp/prom-forward.log`
   (port-forward поднимает `scripts/prom-forward.sh`) или задать `PROM_URL`.
 - `make k8s-netpol-check` падает с `REACHED` из чужого namespace — в кластере не работает контроллер NetworkPolicy

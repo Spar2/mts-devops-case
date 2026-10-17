@@ -83,6 +83,10 @@ spec:
               value: {{ .Values.env.secureCookies | quote }}
             - name: TRUSTED_PROXY_CIDRS
               value: {{ .Values.env.trustedProxyCidrs | quote }}
+            # Тег образа. /ready отдаёт его в JSON version и в заголовке X-App-Version,
+            # чтобы smoke отличил canary от stable.
+            - name: APP_VERSION
+              value: {{ .Values.image.api.tag | quote }}
             - name: PYTHONDONTWRITEBYTECODE
               value: "1"
             - name: HOME

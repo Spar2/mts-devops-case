@@ -103,7 +103,9 @@ Cookie получена на stable (`X-Canary: never`), запрос с ней 
 
 Первая выкладка образа с подписанными сессиями: smoke не принял новый формат cookie → `helm rollback sensor 0`, stable остался на прежней ревизии. После исправления smoke выкладка прошла.
 
-## Повторный прогон: гейт ingress-nginx на коммите 6afb9a3 (PromQL совпадает с текущим `scripts/canary.sh`; строки «prometheus sees …» текущий скрипт уже не печатает)
+## Повторный прогон: гейт ingress-nginx на коммите 6afb9a3
+
+Это прежний скрипт. Три PromQL (`up`, rate и доля 5xx по `nginx_ingress_controller_requests`) в `scripts/canary.sh` сохранились. В том прогоне не было отдельного тега canary, проверки `X-App-Version`, выборки веса, отказа на NaN/Inf и паузы на весе 0 перед uninstall: promote сразу снимал canary. Строки «prometheus sees …» текущий скрипт не печатает. Живого прогона текущего гейта в репозитории нет.
 
 Стенд поднят `make up` в клоне `/tmp/fresh` (k3d-кластер на тот момент уже существовал, скрипт идемпотентен). Ниже шаги, PromQL и итог без строк Helm NOTES.
 
