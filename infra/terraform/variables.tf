@@ -34,3 +34,9 @@ variable "vm_memory_mib" {
   type        = number
   default     = 8192
 }
+
+variable "run_make_up" {
+  description = "После клона запустить в госте make up K3D=0. false — только пакеты, пользователь ubuntu и клон (малая ВМ без k3s)."
+  type        = bool
+  default     = true
+}
