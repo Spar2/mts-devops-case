@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Для стендов, где поды не могут сами скачать образы (закрытый egress, песочница):
-# тянет образы на хосте и импортирует их в k3d-кластер "mts".
+# тянет образы на хосте и импортирует их в k3d-кластер CLUSTER (по умолчанию mts).
+# K3D_CLUSTER — прежнее имя переменной, если CLUSTER не задан.
 # Обычная Ubuntu с интернетом этот шаг не требует.
 set -euo pipefail
-cluster="${K3D_CLUSTER:-mts}"
+cluster="${CLUSTER:-${K3D_CLUSTER:-mts}}"
 images=(
   rancher/mirrored-pause:3.6
   rancher/mirrored-coredns-coredns:1.12.0
